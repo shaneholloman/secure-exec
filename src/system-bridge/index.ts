@@ -6,6 +6,25 @@ export interface FileInfo {
   size: number;
 }
 
+export interface StatInfo {
+  mode: number;
+  size: number;
+  isDirectory: boolean;
+  atimeMs: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  birthtimeMs: number;
+}
+
+export interface DirEntry {
+  name: string;
+  isDirectory: boolean;
+}
+
+// Mode constants
+const S_IFREG = 32768; // Regular file
+const S_IFDIR = 16384; // Directory
+
 export class SystemBridge {
   private directory: Directory;
 
@@ -122,5 +141,87 @@ export class SystemBridge {
    */
   async removeDir(path: string): Promise<void> {
     await this.directory.removeDir(path);
+  }
+
+  /**
+   * Get file/directory stats
+   */
+  async stat(path: string): Promise<StatInfo> {
+    const now = Date.now();
+
+    // Try to read as file first
+    try {
+      const content = await this.directory.readTextFile(path);
+      return {
+        mode: S_IFREG | 0o644,
+        size: content.length,
+        isDirectory: false,
+        atimeMs: now,
+        mtimeMs: now,
+        ctimeMs: now,
+        birthtimeMs: now,
+      };
+    } catch {
+      // Not a file, try as directory
+      try {
+        await this.directory.readDir(path);
+        return {
+          mode: S_IFDIR | 0o755,
+          size: 4096,
+          isDirectory: true,
+          atimeMs: now,
+          mtimeMs: now,
+          ctimeMs: now,
+          birthtimeMs: now,
+        };
+      } catch {
+        throw new Error(`ENOENT: no such file or directory, stat '${path}'`);
+      }
+    }
+  }
+
+  /**
+   * Read directory with type info
+   */
+  async readDirWithTypes(path: string): Promise<DirEntry[]> {
+    const entries = await this.directory.readDir(path);
+    const results: DirEntry[] = [];
+
+    for (const entry of entries) {
+      const name = typeof entry === "string" ? entry : entry.name;
+      const entryPath = path.endsWith("/") ? `${path}${name}` : `${path}/${name}`;
+
+      // Check if it's a directory
+      let isDirectory = false;
+      try {
+        await this.directory.readDir(entryPath);
+        isDirectory = true;
+      } catch {
+        // It's a file
+      }
+
+      results.push({ name, isDirectory });
+    }
+
+    return results;
+  }
+
+  /**
+   * Rename/move a file
+   */
+  async rename(oldPath: string, newPath: string): Promise<void> {
+    // Read the content
+    const content = await this.directory.readFile(oldPath);
+    // Write to new location
+    this.directory.writeFile(newPath, content);
+    // Remove old file
+    await this.directory.removeFile(oldPath);
+  }
+
+  /**
+   * Remove a file (alias for remove)
+   */
+  async unlink(path: string): Promise<void> {
+    await this.directory.removeFile(path);
   }
 }

@@ -41,7 +41,23 @@ async function copyDirectory(
     const hostEntryPath = path.join(hostDir, entry.name);
     const virtualEntryPath = path.posix.join(virtualDir, entry.name);
 
-    if (entry.isDirectory()) {
+    // Handle symlinks by following them
+    if (entry.isSymbolicLink()) {
+      try {
+        const realPath = await fs.realpath(hostEntryPath);
+        const realStats = await fs.stat(realPath);
+
+        if (realStats.isDirectory()) {
+          bridge.mkdir(virtualEntryPath);
+          await copyDirectory(realPath, virtualEntryPath, bridge);
+        } else if (realStats.isFile()) {
+          const content = await fs.readFile(realPath);
+          bridge.writeFile(virtualEntryPath, content);
+        }
+      } catch {
+        // Skip broken symlinks
+      }
+    } else if (entry.isDirectory()) {
       // Create directory in virtual fs
       bridge.mkdir(virtualEntryPath);
       // Recursively copy contents
@@ -51,7 +67,7 @@ async function copyDirectory(
       const content = await fs.readFile(hostEntryPath);
       bridge.writeFile(virtualEntryPath, content);
     }
-    // Skip symlinks, sockets, etc. for simplicity
+    // Skip sockets, etc.
   }
 }
 

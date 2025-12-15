@@ -234,4 +234,89 @@ describe("VirtualMachine", () => {
       }
     });
   });
+
+  describe("Integration tests with real packages", () => {
+    it("should run ms package from host node_modules", async () => {
+      const vm = new VirtualMachine();
+      try {
+        await vm.init();
+        // Load real node_modules from the project
+        await vm.loadFromHost(process.cwd());
+
+        // Write a script that uses ms
+        vm.writeFile(
+          "/test-ms.js",
+          `
+          const ms = require('ms');
+          console.log(ms('1h'));
+          console.log(ms('2d'));
+          console.log(ms(3600000));
+        `
+        );
+
+        const result = await vm.spawn("node", ["/test-ms.js"]);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain("3600000"); // 1h in ms
+        expect(result.stdout).toContain("172800000"); // 2d in ms
+        expect(result.stdout).toContain("1h"); // reverse conversion
+      } finally {
+        vm.dispose();
+      }
+    });
+
+    it("should handle fs operations from script", async () => {
+      const vm = new VirtualMachine();
+      try {
+        await vm.init();
+
+        // Write a script that uses fs
+        vm.writeFile(
+          "/test-fs.js",
+          `
+          const fs = require('fs');
+          fs.writeFileSync('/output.json', JSON.stringify({ hello: 'world' }));
+          const content = fs.readFileSync('/output.json', 'utf8');
+          console.log(content);
+        `
+        );
+
+        const result = await vm.spawn("node", ["/test-fs.js"]);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain('{"hello":"world"}');
+
+        // Verify the file was actually written
+        const content = await vm.readFile("/output.json");
+        expect(JSON.parse(content)).toEqual({ hello: "world" });
+      } finally {
+        vm.dispose();
+      }
+    });
+
+    it("should handle path operations from script", async () => {
+      const vm = new VirtualMachine();
+      try {
+        await vm.init();
+
+        vm.writeFile(
+          "/test-path.js",
+          `
+          const path = require('path');
+          console.log(path.join('/foo', 'bar', 'baz.txt'));
+          console.log(path.dirname('/foo/bar/baz.txt'));
+          console.log(path.basename('/foo/bar/baz.txt'));
+          console.log(path.extname('/foo/bar/baz.txt'));
+        `
+        );
+
+        const result = await vm.spawn("node", ["/test-path.js"]);
+        expect(result.code).toBe(0);
+        expect(result.stdout).toContain("/foo/bar/baz.txt");
+        expect(result.stdout).toContain("/foo/bar");
+        expect(result.stdout).toContain("baz.txt");
+        expect(result.stdout).toContain(".txt");
+      } finally {
+        vm.dispose();
+      }
+    });
+  });
 });

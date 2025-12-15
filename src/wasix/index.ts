@@ -21,7 +21,7 @@ const POLL_INTERVAL_MS = 20;
 const MAX_POLLS = 500; // 10 seconds total
 
 let wasmerInitialized = false;
-let nodeShimPkg: Awaited<ReturnType<typeof Wasmer.fromFile>> | null = null;
+let wasixRuntime: Awaited<ReturnType<typeof Wasmer.fromFile>> | null = null;
 
 export class WasixInstance {
   private directory: Directory;
@@ -46,20 +46,22 @@ export class WasixInstance {
       wasmerInitialized = true;
     }
 
-    // Load the node-shim package if not already loaded
-    if (!nodeShimPkg) {
+    // Load the wasix-runtime package if not already loaded
+    if (!wasixRuntime) {
       const currentDir = path.dirname(fileURLToPath(import.meta.url));
-      const webcPath = path.resolve(currentDir, "../../assets/node-shim.webc");
+      const webcPath = path.resolve(
+        currentDir,
+        "../../assets/wasix-runtime.webc"
+      );
       try {
         const webcBytes = await fs.readFile(webcPath);
-        nodeShimPkg = await Wasmer.fromFile(webcBytes);
+        wasixRuntime = await Wasmer.fromFile(webcBytes);
       } catch (err) {
-        // If webc not found, try to get coreutils from registry
-        // This fallback doesn't have node shim but provides basic shell
-        console.warn(
-          "Warning: node-shim.webc not found, falling back to registry coreutils"
+        // wasix-runtime.webc is required - throw error if not found
+        throw new Error(
+          `wasix-runtime.webc not found at ${webcPath}. ` +
+            `Please build the wasix-runtime package first.`
         );
-        nodeShimPkg = await Wasmer.fromRegistry("sharrattj/coreutils");
       }
     }
 
@@ -80,15 +82,15 @@ export class WasixInstance {
   async exec(commandString: string): Promise<ExecResult> {
     await this.init();
 
-    if (!nodeShimPkg) {
+    if (!wasixRuntime) {
       throw new Error("WASIX not properly initialized");
     }
 
     // Use bash -c to execute the command string
-    const bashCmd = nodeShimPkg.commands["bash"];
+    const bashCmd = wasixRuntime.commands["bash"];
     if (!bashCmd) {
       // Fallback to sh if bash isn't available
-      const shCmd = nodeShimPkg.commands["sh"];
+      const shCmd = wasixRuntime.commands["sh"];
       if (!shCmd) {
         throw new Error("No shell command (bash or sh) available");
       }
@@ -106,14 +108,14 @@ export class WasixInstance {
   async run(commandName: string, args: string[] = []): Promise<ExecResult> {
     await this.init();
 
-    if (!nodeShimPkg) {
+    if (!wasixRuntime) {
       throw new Error("WASIX not properly initialized");
     }
 
-    const cmd = nodeShimPkg.commands[commandName];
+    const cmd = wasixRuntime.commands[commandName];
     if (!cmd) {
       // Try to run via bash
-      const bashCmd = nodeShimPkg.commands["bash"];
+      const bashCmd = wasixRuntime.commands["bash"];
       if (bashCmd) {
         const fullCmd = [commandName, ...args].join(" ");
         return this.runCommand(bashCmd, ["-c", fullCmd]);
@@ -166,7 +168,7 @@ export class WasixInstance {
   ): Promise<ExecResult> {
     await this.init();
 
-    if (!nodeShimPkg) {
+    if (!wasixRuntime) {
       throw new Error("WASIX not properly initialized");
     }
 
@@ -174,7 +176,7 @@ export class WasixInstance {
     const ipcDir = new Directory();
 
     // Get command
-    const cmd = nodeShimPkg.commands[commandName];
+    const cmd = wasixRuntime.commands[commandName];
     if (!cmd) {
       throw new Error(`Command not found: ${commandName}`);
     }

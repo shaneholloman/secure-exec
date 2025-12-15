@@ -1,25 +1,12 @@
 import * as esbuild from "esbuild";
-import { fileURLToPath } from "url";
-import * as path from "path";
-import * as fs from "fs";
+import stdLibBrowser from "node-stdlib-browser";
 
 // Cache bundled polyfills
 const polyfillCache: Map<string, string> = new Map();
 
-// Map of stdlib modules to their polyfill packages
-const STDLIB_POLYFILLS: Record<string, string> = {
-  path: "path-browserify",
-  buffer: "buffer/",
-  events: "events/",
-  util: "util/util.js",
-  assert: "assert/",
-  url: "url/",
-  querystring: "querystring-es3",
-  string_decoder: "string_decoder/",
-  punycode: "punycode/",
-  stream: "stream-browserify",
-  timers: "timers-browserify",
-};
+// node-stdlib-browser provides the mapping from Node.js stdlib to polyfill paths
+// e.g., { path: "/path/to/path-browserify/index.js", fs: null, ... }
+// We use this mapping instead of maintaining our own
 
 /**
  * Bundle a stdlib polyfill module using esbuild
@@ -28,23 +15,15 @@ export async function bundlePolyfill(moduleName: string): Promise<string> {
   const cached = polyfillCache.get(moduleName);
   if (cached) return cached;
 
-  const polyfillPackage = STDLIB_POLYFILLS[moduleName];
-  if (!polyfillPackage) {
+  // Get the polyfill entry point from node-stdlib-browser
+  const entryPoint = stdLibBrowser[moduleName as keyof typeof stdLibBrowser];
+  if (!entryPoint) {
     throw new Error(`No polyfill available for module: ${moduleName}`);
   }
 
-  // Create a virtual entry that exports the polyfill
-  const entryCode = `
-    const mod = require("${polyfillPackage}");
-    module.exports = mod;
-  `;
-
+  // Bundle using esbuild with the direct path from node-stdlib-browser
   const result = await esbuild.build({
-    stdin: {
-      contents: entryCode,
-      resolveDir: process.cwd(),
-      loader: "js",
-    },
+    entryPoints: [entryPoint],
     bundle: true,
     write: false,
     format: "iife",
@@ -56,7 +35,6 @@ export async function bundlePolyfill(moduleName: string): Promise<string> {
       "process.env.NODE_ENV": '"production"',
       global: "globalThis",
     },
-    inject: [],
   });
 
   const code = result.outputFiles[0].text;
@@ -71,19 +49,23 @@ export async function bundlePolyfill(moduleName: string): Promise<string> {
 }
 
 /**
- * Get all available stdlib modules
+ * Get all available stdlib modules (those with non-null polyfills)
  */
 export function getAvailableStdlib(): string[] {
-  return Object.keys(STDLIB_POLYFILLS);
+  return Object.keys(stdLibBrowser).filter(
+    (key) => stdLibBrowser[key as keyof typeof stdLibBrowser] !== null
+  );
 }
 
 /**
  * Check if a module has a polyfill available
+ * Note: fs returns null from node-stdlib-browser since we provide our own implementation
  */
 export function hasPolyfill(moduleName: string): boolean {
   // Strip node: prefix
   const name = moduleName.replace(/^node:/, "");
-  return name in STDLIB_POLYFILLS;
+  const polyfill = stdLibBrowser[name as keyof typeof stdLibBrowser];
+  return polyfill !== undefined && polyfill !== null;
 }
 
 /**
