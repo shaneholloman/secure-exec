@@ -255,11 +255,11 @@ Build and include the node shim as a .webc package so bash can call `node` via I
 
 **Implementation:**
 
-The Rust shim source is in `scratch/wasmer-node-shim/`. Build process:
+Create the Rust shim at `/wasmer-node-shim/`. Build process:
 
 ```bash
 # Build the Rust shim to WASM
-cd scratch/wasmer-node-shim
+cd wasmer-node-shim
 cargo build --target wasm32-wasmer-wasi --release
 
 # Package as .webc with bash and coreutils
