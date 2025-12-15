@@ -74,7 +74,11 @@ this vm will be bound to BOTH the node shim. we only care about the file system 
 
 ### node shim
 
+runs Node.js code in an isolated-vm isolate. provides polyfilled node stdlib (fs, path, etc) and supports requiring packages from node_modules.
+
 ### wasix vm
+
+uses WebAssembly.sh to emulate a Linux shell environment. provides shell commands (ls, cd, etc) and hooks into the node shim when running `node` commands.
 
 ## steps
 
