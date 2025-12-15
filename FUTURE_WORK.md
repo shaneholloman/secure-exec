@@ -1,7 +1,20 @@
 # future work
 
-- fs-polyfill: inline compiled code at build time instead of runtime fs.readFileSync()
-- fs-polyfill: add dedicated test suite for the package
+## fs-polyfill
+- inline compiled code at build time instead of runtime fs.readFileSync()
+- add dedicated test suite for the package
+- implement watch(), watchFile(), unwatchFile() (currently no-ops)
+- implement proper stream behavior for createReadStream/createWriteStream (backpressure, events)
+- improve binary file handling (currently text-based internally)
+
+## Node.js polyfills
+- child_process - not available
+- net, dgram, http, https - not available (no network in sandbox)
+- worker_threads - not available
+- crypto - limited polyfill (not full Node.js crypto)
+
+## other
+- WASM memory limits - memoryLimit is plumbed through but not yet enforced on WASM side
 - terminal emulation
 - get claude code cli working in this emulator
 - emulate npm

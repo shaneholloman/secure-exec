@@ -73,6 +73,22 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.3)
 
+  packages/terminal:
+    dependencies:
+      '@wasmer/sdk':
+        specifier: ^0.9.0
+        version: 0.9.0
+      nano-sandbox:
+        specifier: workspace:*
+        version: link:../nano-sandbox
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.19.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
 packages:
 
   /@esbuild/aix-ppc64@0.21.5:

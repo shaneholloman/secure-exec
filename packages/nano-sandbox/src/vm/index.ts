@@ -51,6 +51,7 @@ export class VirtualMachine {
       directory: this.bridge.getDirectory(),
       systemBridge: this.bridge,
       nodeProcess: this.nodeProcess,
+      memoryLimit: this.options.memoryLimit,
     });
 
     this.initialized = true;

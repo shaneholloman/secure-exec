@@ -15,10 +15,10 @@ export interface WasixInstanceOptions {
   directory?: Directory;
   systemBridge?: SystemBridge;
   nodeProcess?: NodeProcess;
+  memoryLimit?: number; // MB - reserved for future WASM memory limiting
 }
 
 const POLL_INTERVAL_MS = 20;
-const MAX_POLLS = 500; // 10 seconds total
 
 let wasmerInitialized = false;
 let wasixRuntime: Awaited<ReturnType<typeof Wasmer.fromFile>> | null = null;
@@ -27,12 +27,14 @@ export class WasixInstance {
   private directory: Directory;
   private systemBridge?: SystemBridge;
   private nodeProcess?: NodeProcess;
+  private memoryLimit?: number;
   private initialized = false;
 
   constructor(options: WasixInstanceOptions = {}) {
     this.directory = options.directory ?? new Directory();
     this.systemBridge = options.systemBridge;
     this.nodeProcess = options.nodeProcess;
+    this.memoryLimit = options.memoryLimit;
   }
 
   /**
@@ -183,11 +185,9 @@ export class WasixInstance {
 
     // Start IPC polling loop
     let pollActive = true;
-    let pollCount = 0;
 
     const poller = (async () => {
-      while (pollActive && pollCount < MAX_POLLS) {
-        pollCount++;
+      while (pollActive) {
 
         try {
           // Check for request file
