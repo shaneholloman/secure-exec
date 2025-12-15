@@ -188,36 +188,53 @@ const result = await vm.spawn("node", ["-e", `
 expect(result.stdout).toContain("3600000");
 ```
 
-## 3. additional stdlib polyfills
+## 3. use node-stdlib-browser for all polyfills
 
-Add more node stdlib polyfills using node-stdlib-browser (already a dependency).
+Replace the manual polyfill mapping with node-stdlib-browser's complete mapping.
 
-**Priority polyfills:**
-- `buffer` - Buffer class, widely used
-- `stream` - Stream classes, needed by many packages
-- `assert` - assertions
-- `url` - URL parsing
-- `querystring` - query string parsing
-- `os` - basic os info (can return mock values)
-
-**Implementation:**
-
-Extend `polyfills.ts` to bundle these from node-stdlib-browser:
-
+**Current limitation:**
 ```ts
+// polyfills.ts manually lists only 3 modules
 const POLYFILL_SOURCES: Record<string, string> = {
   path: "path-browserify",
   events: "events",
   util: "util",
-  // Add these:
-  buffer: "buffer",
-  stream: "stream-browserify",
-  assert: "assert",
-  url: "url",
-  querystring: "querystring-es3",
-  os: "os-browserify/browser",
 };
 ```
+
+**Implementation:**
+
+Just import the mapping from node-stdlib-browser:
+
+```ts
+import stdLibBrowser from "node-stdlib-browser";
+
+// stdLibBrowser is already a complete mapping:
+// {
+//   assert: "/path/to/assert/index.js",
+//   buffer: "/path/to/buffer/index.js",
+//   crypto: "/path/to/crypto-browserify/index.js",
+//   events: "/path/to/events/events.js",
+//   fs: null,  // no polyfill available
+//   path: "/path/to/path-browserify/index.js",
+//   stream: "/path/to/stream-browserify/index.js",
+//   ...etc
+// }
+
+export function hasPolyfill(name: string): boolean {
+  return name in stdLibBrowser && stdLibBrowser[name] !== null;
+}
+
+export async function bundlePolyfill(name: string): Promise<string> {
+  const entryPoint = stdLibBrowser[name];
+  if (!entryPoint) throw new Error(`No polyfill for ${name}`);
+
+  // Bundle with esbuild (already doing this)
+  return esbuild.build({ entryPoints: [entryPoint], ... });
+}
+```
+
+This gives us all Node.js builtins that have browser polyfills: assert, buffer, console, constants, crypto, domain, events, http, https, os, path, punycode, process, querystring, stream, string_decoder, sys, timers, tty, url, util, vm, zlib.
 
 **Test:**
 ```ts
