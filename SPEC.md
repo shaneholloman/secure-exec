@@ -320,10 +320,3 @@ const shResult = await vm.spawn("bash", ["/test.sh"]);
 expect(shResult.stdout).toContain("hello from node");
 ```
 
-## future work
-
-- terminal emulation
-- get claude code cli working in this emulator
-- emulate npm
-- native addon polyfills - npm packages with native C/C++ bindings won't work in isolated-vm. may need a polyfill registry mapping them to pure-JS alternatives (e.g. esbuild→esbuild-wasm, bcrypt→bcryptjs, sharp→sharp-wasm, sqlite3→sql.js)
-
