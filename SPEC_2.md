@@ -404,20 +404,42 @@ const result = await proc.run(`
 expect(result).toBe("aGVsbG8=");
 ```
 
-## 4. node shim .webc package
+## 4. wasix-runtime .webc package
 
-Build and include the node shim as a .webc package so bash can call `node` via IPC.
+Build and include the wasix-runtime as a .webc package containing bash, coreutils, and a node IPC bridge.
 
 **Current state:**
-- Falls back to `sharrattj/coreutils` which doesn't have node shim
-- IPC polling code exists in WasixInstance but the WASM-side shim isn't bundled
+- Falls back to `sharrattj/coreutils` if webc not found (should error instead)
+- Code refers to "node-shim" (should be "wasix-runtime")
+- IPC polling code exists in WasixInstance but the WASM-side bridge isn't bundled
+
+**Code changes needed:**
+
+Rename all references from "node-shim" to "wasix-runtime":
+- `assets/node-shim.webc` → `assets/wasix-runtime.webc`
+- `nodeShimPkg` variable → `wasixRuntime`
+- Comments and error messages
+
+Remove fallback behavior in WasixInstance.init():
+```ts
+// Before (falls back silently)
+if (!nodeShimPkg) {
+  console.warn("Warning: node-shim.webc not found, falling back...");
+  nodeShimPkg = await Wasmer.fromRegistry("sharrattj/coreutils");
+}
+
+// After (error if missing)
+if (!wasixRuntime) {
+  throw new Error("wasix-runtime.webc not found at assets/wasix-runtime.webc");
+}
+```
 
 **Implementation:**
 
-Create the Rust shim at `/wasmer-node-shim/`. Build process:
+Create the Rust node bridge at `/wasmer-node-shim/`. Build process:
 
 ```bash
-# Build the Rust shim to WASM
+# Build the node bridge to WASM
 cd wasmer-node-shim
 cargo build --target wasm32-wasmer-wasi --release
 
@@ -425,7 +447,7 @@ cargo build --target wasm32-wasmer-wasi --release
 wasmer create-exe ... # or use wasmer package tooling
 ```
 
-The shim does:
+The node bridge does:
 1. Receive args (e.g., `node -e "console.log(1)"`)
 2. Write args to `/ipc/request.txt`
 3. Poll for `/ipc/response.txt`
@@ -435,7 +457,7 @@ The shim does:
 **Package structure (wasmer.toml):**
 ```toml
 [package]
-name = "node-shim"
+name = "wasix-runtime"
 version = "0.1.0"
 
 [dependencies]
@@ -444,7 +466,7 @@ version = "0.1.0"
 
 [[command]]
 name = "node"
-module = "node-shim.wasm"
+module = "node-bridge.wasm"
 
 [[command]]
 name = "bash"
