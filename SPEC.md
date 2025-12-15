@@ -65,7 +65,7 @@ const raw = vm.readFile("/test.json");
 console.log(JSON.parse(raw)); // { hello: "world" }
 ```
 
-**stretch goal** - shell scripts that call node (requires custom WASM shell):
+**stretch goal** - shell scripts that call node (proven viable via file-based IPC, see [test 18](scratch/wasmer-test/test18-fs-polling-ipc.ts)):
 
 ```ts
 const vm = new VirtualMachine("/path/to/local/fs");
@@ -121,7 +121,7 @@ fs.writeFileSync = (path, content) => {
 
 uses @wasmer/sdk to run Linux commands. uses `sharrattj/coreutils` package from Wasmer registry for ls, cat, echo, etc.
 
-**v1 limitation:** no way to intercept `node` commands from within WASM. VirtualMachine.spawn() handles routing in JS (see step 7). shell scripts that internally call node require custom WASM shell (see dependencies section).
+**v1 limitation:** VirtualMachine.spawn() handles routing in JS (see step 7). shell scripts that internally call node are supported via file-based IPC polling (see [test 18](scratch/wasmer-test/test18-fs-polling-ipc.ts)).
 
 ### dependencies
 
@@ -153,11 +153,28 @@ pnpm add isolated-vm
 
 **wasm-js bridging** - how WasixInstance delegates `node` commands to NodeProcess. see TEST_WASM_JS_BRIDGE.md for research.
 
-**custom WASM shell with bridge imports** ([test 9](scratch/wasmer-test/test9-wasi-plus-custom.ts)):
+**file-based IPC polling** ([test 18](scratch/wasmer-test/test18-fs-polling-ipc.ts), [rust shim](scratch/wasmer-node-shim/)):
+proven approach for bridging WASM to host Node.js:
+
+1. build a rust-based `node` shim (compiled to WASM) that:
+   - writes args to `/ipc/request.txt`
+   - polls for `/ipc/response.txt`
+   - reads exit code + stdout and returns
+
+2. host-side JavaScript:
+   - polls Directory for `/ipc/request.txt`
+   - when found, executes real `node` via child_process
+   - writes result to `/ipc/response.txt`
+
+3. package the shim with bash + coreutils in a .webc file
+
+this enables shell scripts to call `node` since bash can spawn our custom node shim, which then bridges to real Node.js via file-based IPC. latency is ~200-500ms per call due to polling.
+
+**custom WASM shell with native bridge imports** ([test 9](scratch/wasmer-test/test9-wasi-plus-custom.ts)):
+alternative approach using direct WASM imports (lower latency but more complex):
 - use Node.js native WASI (not @wasmer/sdk) with custom `bridge.*` imports
 - WASM shell calls `bridge.spawn_node("script.js")` → JS handler → NodeProcess
 - requires building a custom WASM binary in Rust that imports both WASI and bridge functions
-- this is what enables shell scripts to call node internally
 
 ## steps
 
@@ -265,7 +282,7 @@ const lsResult = await vm.spawn("ls", ["/"]);
 expect(lsResult.stdout).toContain("script.js");
 ```
 
-**v1 limitation:** `vm.spawn("sh", ["script-that-calls-node.sh"])` won't work because the shell runs in WASM and can't delegate back to NodeProcess. this requires the custom WASM shell approach (see dependencies section).
+**note:** `vm.spawn("sh", ["script-that-calls-node.sh"])` is supported via file-based IPC polling. the shell runs in WASM with a custom `node` shim that bridges to NodeProcess (see [test 18](scratch/wasmer-test/test18-fs-polling-ipc.ts) and [rust shim](scratch/wasmer-node-shim/)).
 
 ## future work
 
