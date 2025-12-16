@@ -2,6 +2,9 @@
 // This module runs inside the isolate and provides Node.js fs API compatibility
 // It communicates with the host via the _fs Reference object
 
+import { Buffer } from "buffer";
+import type * as nodeFs from "fs";
+
 // Declare globals that are set up by the host environment
 declare const _fs: {
   readFile: { applySyncPromise: (ctx: undefined, args: [string]) => string };
@@ -15,16 +18,12 @@ declare const _fs: {
   rename: { applySyncPromise: (ctx: undefined, args: [string, string]) => void };
 };
 
-declare const Buffer: {
-  from: (data: string | Uint8Array) => Uint8Array & { toString(encoding?: string): string };
-};
-
 // File descriptor table
 const fdTable = new Map<number, { path: string; flags: number; position: number }>();
 let nextFd = 3;
 
 // Stats class
-class Stats {
+class Stats implements nodeFs.Stats {
   dev: number;
   ino: number;
   mode: number;
@@ -104,13 +103,17 @@ class Stats {
 }
 
 // Dirent class for readdir with withFileTypes
-class Dirent {
+class Dirent implements nodeFs.Dirent<string> {
   name: string;
+  parentPath: string;
+  path: string; // Deprecated alias for parentPath
   private _isDir: boolean;
 
-  constructor(name: string, isDir: boolean) {
+  constructor(name: string, isDir: boolean, parentPath: string = "") {
     this.name = name;
     this._isDir = isDir;
+    this.parentPath = parentPath;
+    this.path = parentPath;
   }
 
   isFile(): boolean {
@@ -137,7 +140,7 @@ class Dirent {
 }
 
 // Parse flags string to number
-function parseFlags(flags: string | number): number {
+function parseFlags(flags: OpenMode): number {
   if (typeof flags === "number") return flags;
   const flagMap: Record<string, number> = {
     r: 0,
@@ -191,30 +194,82 @@ function createFsError(
   return err;
 }
 
-// Type definitions for the fs module
-type Encoding = "utf8" | "utf-8" | "ascii" | "binary" | "base64" | "hex" | null;
-type ReadFileOptions = { encoding?: Encoding } | Encoding;
-type WriteFileOptions = { encoding?: Encoding; flag?: string } | Encoding;
-type ReaddirOptions = { withFileTypes?: boolean };
-type MkdirOptions = { recursive?: boolean };
-type OpenFlags = string | number;
-type NodeCallback<T> = (err: Error | null, result?: T) => void;
+// Type definitions for the fs module - use Node.js types
+type PathLike = nodeFs.PathLike;
+type PathOrFileDescriptor = nodeFs.PathOrFileDescriptor;
+type OpenMode = nodeFs.OpenMode;
+type Mode = nodeFs.Mode;
+type Encoding = BufferEncoding | null;
+type ReadFileOptions = Parameters<typeof nodeFs.readFileSync>[1];
+type WriteFileOptions = nodeFs.WriteFileOptions;
+type MakeDirectoryOptions = nodeFs.MakeDirectoryOptions;
+type RmDirOptions = nodeFs.RmDirOptions;
+type ReaddirOptions = nodeFs.ObjectEncodingOptions & { withFileTypes?: boolean; recursive?: boolean };
+type MkdirOptions = MakeDirectoryOptions;
+type OpenFlags = nodeFs.OpenMode;
+type NodeCallback<T> = (err: NodeJS.ErrnoException | null, result?: T) => void;
+
+// Helper to convert PathLike to string
+function toPathString(path: PathLike): string {
+  if (typeof path === "string") return path;
+  if (Buffer.isBuffer(path)) return path.toString("utf8");
+  if (path instanceof URL) return path.pathname;
+  return String(path);
+}
 
 // The fs module implementation
 const fs = {
   // Constants
   constants: {
+    // File Access Constants
+    F_OK: 0,
+    R_OK: 4,
+    W_OK: 2,
+    X_OK: 1,
+    // File Copy Constants
+    COPYFILE_EXCL: 1,
+    COPYFILE_FICLONE: 2,
+    COPYFILE_FICLONE_FORCE: 4,
+    // File Open Constants
     O_RDONLY: 0,
     O_WRONLY: 1,
     O_RDWR: 2,
     O_CREAT: 64,
     O_EXCL: 128,
+    O_NOCTTY: 256,
     O_TRUNC: 512,
     O_APPEND: 1024,
+    O_DIRECTORY: 65536,
+    O_NOATIME: 262144,
+    O_NOFOLLOW: 131072,
+    O_SYNC: 1052672,
+    O_DSYNC: 4096,
+    O_SYMLINK: 2097152,
+    O_DIRECT: 16384,
+    O_NONBLOCK: 2048,
+    // File Type Constants
     S_IFMT: 61440,
     S_IFREG: 32768,
     S_IFDIR: 16384,
+    S_IFCHR: 8192,
+    S_IFBLK: 24576,
+    S_IFIFO: 4096,
     S_IFLNK: 40960,
+    S_IFSOCK: 49152,
+    // File Mode Constants
+    S_IRWXU: 448,
+    S_IRUSR: 256,
+    S_IWUSR: 128,
+    S_IXUSR: 64,
+    S_IRWXG: 56,
+    S_IRGRP: 32,
+    S_IWGRP: 16,
+    S_IXGRP: 8,
+    S_IRWXO: 7,
+    S_IROTH: 4,
+    S_IWOTH: 2,
+    S_IXOTH: 1,
+    UV_FS_O_FILEMAP: 536870912,
   },
 
   Stats,
@@ -222,68 +277,74 @@ const fs = {
 
   // Sync methods
 
-  readFileSync(path: string, options?: ReadFileOptions): string | Uint8Array {
+  readFileSync(path: PathOrFileDescriptor, options?: ReadFileOptions): string | Buffer {
+    const pathStr = typeof path === "number" ? fdTable.get(path)?.path : toPathString(path);
+    if (!pathStr) throw createFsError("EBADF", "EBADF: bad file descriptor", "read");
     const encoding =
-      typeof options === "string" ? options : options?.encoding;
-    const content = _fs.readFile.applySyncPromise(undefined, [String(path)]);
+      typeof options === "string" ? options : (options as { encoding?: BufferEncoding | null })?.encoding;
+    const content = _fs.readFile.applySyncPromise(undefined, [pathStr]);
     if (encoding) return content;
     // Return Buffer if no encoding specified
     return Buffer.from(content);
   },
 
   writeFileSync(
-    path: string,
-    data: string | Uint8Array,
+    file: PathOrFileDescriptor,
+    data: string | NodeJS.ArrayBufferView,
     _options?: WriteFileOptions
   ): void {
+    const pathStr = typeof file === "number" ? fdTable.get(file)?.path : toPathString(file);
+    if (!pathStr) throw createFsError("EBADF", "EBADF: bad file descriptor", "write");
     const content =
       typeof data === "string"
         ? data
-        : data instanceof Uint8Array
+        : ArrayBuffer.isView(data)
           ? new TextDecoder().decode(data)
           : String(data);
-    _fs.writeFile.applySync(undefined, [String(path), content]);
+    _fs.writeFile.applySync(undefined, [pathStr, content]);
   },
 
   appendFileSync(
-    path: string,
+    path: PathOrFileDescriptor,
     data: string | Uint8Array,
     options?: WriteFileOptions
   ): void {
-    const existing = fs.existsSync(path)
+    const existing = fs.existsSync(path as PathLike)
       ? (fs.readFileSync(path, "utf8") as string)
       : "";
     const content = typeof data === "string" ? data : String(data);
     fs.writeFileSync(path, existing + content, options);
   },
 
-  readdirSync(path: string, options?: ReaddirOptions): string[] | Dirent[] {
-    const entriesJson = _fs.readDir.applySyncPromise(undefined, [String(path)]);
+  readdirSync(path: PathLike, options?: nodeFs.ObjectEncodingOptions & { withFileTypes?: boolean; recursive?: boolean }): string[] | Dirent[] {
+    const pathStr = toPathString(path);
+    const entriesJson = _fs.readDir.applySyncPromise(undefined, [pathStr]);
     const entries = JSON.parse(entriesJson) as Array<{
       name: string;
       isDirectory: boolean;
     }>;
     if (options?.withFileTypes) {
-      return entries.map((e) => new Dirent(e.name, e.isDirectory));
+      return entries.map((e) => new Dirent(e.name, e.isDirectory, pathStr));
     }
     return entries.map((e) => e.name);
   },
 
-  mkdirSync(path: string, options?: MkdirOptions): void {
-    const recursive = options?.recursive ?? false;
-    _fs.mkdir.applySync(undefined, [String(path), recursive]);
+  mkdirSync(path: PathLike, options?: MakeDirectoryOptions | Mode): string | undefined {
+    const recursive = typeof options === "object" ? options?.recursive ?? false : false;
+    _fs.mkdir.applySync(undefined, [toPathString(path), recursive]);
+    return recursive ? toPathString(path) : undefined;
   },
 
-  rmdirSync(path: string): void {
-    _fs.rmdir.applySyncPromise(undefined, [String(path)]);
+  rmdirSync(path: PathLike, _options?: RmDirOptions): void {
+    _fs.rmdir.applySyncPromise(undefined, [toPathString(path)]);
   },
 
-  existsSync(path: string): boolean {
-    return _fs.exists.applySyncPromise(undefined, [String(path)]);
+  existsSync(path: PathLike): boolean {
+    return _fs.exists.applySyncPromise(undefined, [toPathString(path)]);
   },
 
-  statSync(path: string): Stats {
-    const statJson = _fs.stat.applySyncPromise(undefined, [String(path)]);
+  statSync(path: PathLike, _options?: nodeFs.StatSyncOptions): Stats {
+    const statJson = _fs.stat.applySyncPromise(undefined, [toPathString(path)]);
     const stat = JSON.parse(statJson) as {
       mode: number;
       size: number;
@@ -295,27 +356,28 @@ const fs = {
     return new Stats(stat);
   },
 
-  lstatSync(path: string): Stats {
+  lstatSync(path: PathLike, _options?: nodeFs.StatSyncOptions): Stats {
     // In our virtual fs, lstat is the same as stat (no symlinks)
     return fs.statSync(path);
   },
 
-  unlinkSync(path: string): void {
-    _fs.unlink.applySyncPromise(undefined, [String(path)]);
+  unlinkSync(path: PathLike): void {
+    _fs.unlink.applySyncPromise(undefined, [toPathString(path)]);
   },
 
-  renameSync(oldPath: string, newPath: string): void {
-    _fs.rename.applySyncPromise(undefined, [String(oldPath), String(newPath)]);
+  renameSync(oldPath: PathLike, newPath: PathLike): void {
+    _fs.rename.applySyncPromise(undefined, [toPathString(oldPath), toPathString(newPath)]);
   },
 
-  copyFileSync(src: string, dest: string): void {
+  copyFileSync(src: PathLike, dest: PathLike, _mode?: number): void {
     const content = fs.readFileSync(src);
-    fs.writeFileSync(dest, content as Uint8Array);
+    fs.writeFileSync(dest, content as Buffer);
   },
 
   // File descriptor methods
 
-  openSync(path: string, flags: OpenFlags, _mode?: number): number {
+  openSync(path: PathLike, flags: OpenMode, _mode?: Mode | null): number {
+    const pathStr = toPathString(path);
     const numFlags = parseFlags(flags);
     const fd = nextFd++;
 
@@ -328,9 +390,9 @@ const fs = {
     } else if (!exists && !(numFlags & 64)) {
       throw createFsError(
         "ENOENT",
-        `ENOENT: no such file or directory, open '${path}'`,
+        `ENOENT: no such file or directory, open '${pathStr}'`,
         "open",
-        path
+        pathStr
       );
     }
 
@@ -339,7 +401,7 @@ const fs = {
       fs.writeFileSync(path, "");
     }
 
-    fdTable.set(fd, { path, flags: numFlags, position: 0 });
+    fdTable.set(fd, { path: pathStr, flags: numFlags, position: 0 });
     return fd;
   },
 
@@ -352,10 +414,10 @@ const fs = {
 
   readSync(
     fd: number,
-    buffer: Uint8Array,
-    offset: number,
-    length: number,
-    position: number | null
+    buffer: NodeJS.ArrayBufferView,
+    offset?: number | null,
+    length?: number | null,
+    position?: nodeFs.ReadPosition | null
   ): number {
     const entry = fdTable.get(fd);
     if (!entry) {
@@ -366,13 +428,15 @@ const fs = {
     }
 
     const content = fs.readFileSync(entry.path, "utf8") as string;
-    const readPos =
-      position !== null && position !== undefined ? position : entry.position;
-    const toRead = content.slice(readPos, readPos + length);
+    const readOffset = offset ?? 0;
+    const readLength = length ?? (buffer.byteLength - readOffset);
+    const pos = position !== null && position !== undefined ? Number(position) : entry.position;
+    const toRead = content.slice(pos, pos + readLength);
     const bytes = Buffer.from(toRead);
+    const targetBuffer = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 
-    for (let i = 0; i < bytes.length && i < length; i++) {
-      buffer[offset + i] = bytes[i];
+    for (let i = 0; i < bytes.length && i < readLength; i++) {
+      targetBuffer[readOffset + i] = bytes[i];
     }
 
     if (position === null || position === undefined) {
@@ -384,9 +448,9 @@ const fs = {
 
   writeSync(
     fd: number,
-    buffer: string | Uint8Array,
-    offset?: number,
-    length?: number,
+    buffer: string | NodeJS.ArrayBufferView,
+    offsetOrPosition?: number | null,
+    lengthOrEncoding?: number | BufferEncoding | null,
     position?: number | null
   ): number {
     const entry = fdTable.get(fd);
@@ -399,12 +463,17 @@ const fs = {
 
     // Handle string or buffer
     let data: string;
+    let writePosition: number | null | undefined;
+
     if (typeof buffer === "string") {
       data = buffer;
-      length = data.length;
+      writePosition = offsetOrPosition;
     } else {
-      const slice = buffer.slice(offset ?? 0, (offset ?? 0) + (length ?? buffer.length));
-      data = new TextDecoder().decode(slice);
+      const offset = offsetOrPosition ?? 0;
+      const length = (typeof lengthOrEncoding === "number" ? lengthOrEncoding : null) ?? (buffer.byteLength - offset);
+      const view = new Uint8Array(buffer.buffer, buffer.byteOffset + offset, length);
+      data = new TextDecoder().decode(view);
+      writePosition = position;
     }
 
     // Read existing content
@@ -418,8 +487,8 @@ const fs = {
     if (entry.flags & 1024) {
       // O_APPEND
       writePos = content.length;
-    } else if (position !== null && position !== undefined) {
-      writePos = position;
+    } else if (writePosition !== null && writePosition !== undefined) {
+      writePos = writePosition;
     } else {
       writePos = entry.position;
     }
@@ -435,7 +504,7 @@ const fs = {
     fs.writeFileSync(entry.path, newContent);
 
     // Update position if not using explicit position
-    if (position === null || position === undefined) {
+    if (writePosition === null || writePosition === undefined) {
       entry.position = writePos + data.length;
     }
 
@@ -581,7 +650,8 @@ const fs = {
         callback(e as Error);
       }
     } else {
-      return Promise.resolve(fs.mkdirSync(path, options as MkdirOptions));
+      fs.mkdirSync(path, options as MkdirOptions);
+      return Promise.resolve();
     }
   },
 
@@ -854,20 +924,40 @@ const fs = {
     }
   },
 
-  realpathSync(path: string): string {
-    // In our virtual fs, just normalize the path
-    return String(path)
-      .replace(/\/\/+/g, "/")
-      .replace(/\/$/, "") || "/";
-  },
-
-  realpath(path: string, callback?: NodeCallback<string>): Promise<string> | void {
-    if (callback) {
-      callback(null, fs.realpathSync(path));
-    } else {
-      return Promise.resolve(fs.realpathSync(path));
+  realpathSync: Object.assign(
+    function realpathSync(path: PathLike): string {
+      // In our virtual fs, just normalize the path
+      return toPathString(path)
+        .replace(/\/\/+/g, "/")
+        .replace(/\/$/, "") || "/";
+    },
+    {
+      native(path: PathLike): string {
+        return toPathString(path)
+          .replace(/\/\/+/g, "/")
+          .replace(/\/$/, "") || "/";
+      }
     }
-  },
+  ),
+
+  realpath: Object.assign(
+    function realpath(path: PathLike, callback?: NodeCallback<string>): Promise<string> | void {
+      if (callback) {
+        callback(null, fs.realpathSync(path));
+      } else {
+        return Promise.resolve(fs.realpathSync(path));
+      }
+    },
+    {
+      native(path: PathLike, callback?: NodeCallback<string>): Promise<string> | void {
+        if (callback) {
+          callback(null, fs.realpathSync.native(path));
+        } else {
+          return Promise.resolve(fs.realpathSync.native(path));
+        }
+      }
+    }
+  ),
 
   createReadStream(
     path: string,
@@ -936,6 +1026,18 @@ const fs = {
   watchFile(): void {},
   unwatchFile(): void {},
 };
+
+// Type check: validate that our fs implementation has compatible method signatures
+// We use a custom type that omits Node.js internal properties like __promisify__
+type FsMethodNames = keyof typeof fs;
+type NodeFsMethodSignature<K extends keyof typeof nodeFs> =
+  typeof nodeFs[K] extends (...args: infer A) => infer R ? (...args: A) => R : typeof nodeFs[K];
+
+// Validate key sync methods match Node.js signatures
+type _CheckReadFileSync = typeof fs.readFileSync extends NodeFsMethodSignature<'readFileSync'> ? true : false;
+type _CheckWriteFileSync = typeof fs.writeFileSync extends NodeFsMethodSignature<'writeFileSync'> ? true : false;
+type _CheckStatSync = typeof fs.statSync extends NodeFsMethodSignature<'statSync'> ? true : false;
+type _CheckExistsSync = typeof fs.existsSync extends NodeFsMethodSignature<'existsSync'> ? true : false;
 
 // Export the fs module
 export default fs;
