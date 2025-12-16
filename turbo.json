@@ -1,8 +1,11 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
+    "build:bridge": {
+      "outputs": ["assets/**"]
+    },
     "build": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "build:bridge"],
       "outputs": ["dist/**"]
     },
     "check-types": {
