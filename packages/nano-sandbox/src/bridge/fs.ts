@@ -282,7 +282,22 @@ const fs = {
     if (!pathStr) throw createFsError("EBADF", "EBADF: bad file descriptor", "read");
     const encoding =
       typeof options === "string" ? options : (options as { encoding?: BufferEncoding | null })?.encoding;
-    const content = _fs.readFile.applySyncPromise(undefined, [pathStr]);
+    let content: string;
+    try {
+      content = _fs.readFile.applySyncPromise(undefined, [pathStr]);
+    } catch (err) {
+      // Convert "entry not found" and similar errors to proper ENOENT
+      const errMsg = (err as Error).message || String(err);
+      if (errMsg.includes("entry not found") || errMsg.includes("not found")) {
+        throw createFsError(
+          "ENOENT",
+          `ENOENT: no such file or directory, read '${pathStr}'`,
+          "read",
+          pathStr
+        );
+      }
+      throw err;
+    }
     if (encoding) return content;
     // Return Buffer if no encoding specified
     return Buffer.from(content);
@@ -318,7 +333,22 @@ const fs = {
 
   readdirSync(path: PathLike, options?: nodeFs.ObjectEncodingOptions & { withFileTypes?: boolean; recursive?: boolean }): string[] | Dirent[] {
     const pathStr = toPathString(path);
-    const entriesJson = _fs.readDir.applySyncPromise(undefined, [pathStr]);
+    let entriesJson: string;
+    try {
+      entriesJson = _fs.readDir.applySyncPromise(undefined, [pathStr]);
+    } catch (err) {
+      // Convert "entry not found" and similar errors to proper ENOENT
+      const errMsg = (err as Error).message || String(err);
+      if (errMsg.includes("entry not found") || errMsg.includes("not found")) {
+        throw createFsError(
+          "ENOENT",
+          `ENOENT: no such file or directory, scandir '${pathStr}'`,
+          "scandir",
+          pathStr
+        );
+      }
+      throw err;
+    }
     const entries = JSON.parse(entriesJson) as Array<{
       name: string;
       isDirectory: boolean;
@@ -344,7 +374,23 @@ const fs = {
   },
 
   statSync(path: PathLike, _options?: nodeFs.StatSyncOptions): Stats {
-    const statJson = _fs.stat.applySyncPromise(undefined, [toPathString(path)]);
+    const pathStr = toPathString(path);
+    let statJson: string;
+    try {
+      statJson = _fs.stat.applySyncPromise(undefined, [pathStr]);
+    } catch (err) {
+      // Convert "entry not found" and similar errors to proper ENOENT
+      const errMsg = (err as Error).message || String(err);
+      if (errMsg.includes("entry not found") || errMsg.includes("not found")) {
+        throw createFsError(
+          "ENOENT",
+          `ENOENT: no such file or directory, stat '${pathStr}'`,
+          "stat",
+          pathStr
+        );
+      }
+      throw err;
+    }
     const stat = JSON.parse(statJson) as {
       mode: number;
       size: number;

@@ -21,13 +21,13 @@ export async function bundlePolyfill(moduleName: string): Promise<string> {
     throw new Error(`No polyfill available for module: ${moduleName}`);
   }
 
-  // Bundle using esbuild with the direct path from node-stdlib-browser
+  // Bundle using esbuild with CommonJS format
+  // This ensures proper module.exports handling for all module types including JSON
   const result = await esbuild.build({
     entryPoints: [entryPoint],
     bundle: true,
     write: false,
-    format: "iife",
-    globalName: "__polyfill__",
+    format: "cjs",
     platform: "browser",
     target: "es2020",
     minify: false,
@@ -38,11 +38,28 @@ export async function bundlePolyfill(moduleName: string): Promise<string> {
   });
 
   const code = result.outputFiles[0].text;
-  // Extract the module from the IIFE wrapper
-  const wrappedCode = `(function() {
+
+  // Check if this is a JSON module (esbuild creates *_default but doesn't export it)
+  // For JSON modules, look for the default export pattern and extract it
+  const defaultExportMatch = code.match(/var\s+(\w+_default)\s*=\s*\{/);
+
+  let wrappedCode: string;
+  if (defaultExportMatch && !code.includes('module.exports')) {
+    // JSON module: wrap and return the default export object
+    const defaultVar = defaultExportMatch[1];
+    wrappedCode = `(function() {
     ${code}
-    return __polyfill__;
+    return ${defaultVar};
   })()`;
+  } else {
+    // Regular CommonJS module: wrap and return module.exports
+    wrappedCode = `(function() {
+    var module = { exports: {} };
+    var exports = module.exports;
+    ${code}
+    return module.exports;
+  })()`;
+  }
 
   polyfillCache.set(moduleName, wrappedCode);
   return wrappedCode;

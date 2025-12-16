@@ -508,6 +508,90 @@ export function generateProcessPolyfill(config: ProcessConfig = {}): string {
   // Expose globally
   globalThis.process = process;
 
+  // Timer implementation
+  // These are simple implementations that work synchronously within script execution
+  let _timerId = 0;
+  const _timers = new Map();
+  const _intervals = new Map();
+
+  // Use Promise.resolve().then() for microtask scheduling since queueMicrotask may not be available
+  const _queueMicrotask = typeof queueMicrotask === 'function'
+    ? queueMicrotask
+    : function(fn) { Promise.resolve().then(fn); };
+
+  // Timer handle class that mimics Node.js Timeout object
+  class TimerHandle {
+    constructor(id) {
+      this._id = id;
+      this._destroyed = false;
+    }
+    ref() { return this; }
+    unref() { return this; }
+    hasRef() { return true; }
+    refresh() { return this; }
+    [Symbol.toPrimitive]() { return this._id; }
+  }
+
+  globalThis.setTimeout = function(callback, delay, ...args) {
+    const id = ++_timerId;
+    const handle = new TimerHandle(id);
+    // In sandbox, we'll queue via microtask since we don't have a real event loop
+    // For npm's use case (progress bars), a no-op delay is acceptable
+    _queueMicrotask(() => {
+      if (_timers.has(id)) {
+        _timers.delete(id);
+        try {
+          callback(...args);
+        } catch (e) {
+          // Ignore timer callback errors
+        }
+      }
+    });
+    _timers.set(id, handle);
+    return handle;
+  };
+
+  globalThis.clearTimeout = function(timer) {
+    const id = timer && timer._id !== undefined ? timer._id : timer;
+    _timers.delete(id);
+  };
+
+  globalThis.setInterval = function(callback, delay, ...args) {
+    const id = ++_timerId;
+    const handle = new TimerHandle(id);
+    // For sandbox, interval just runs once (like setTimeout)
+    // Real intervals would require an event loop
+    _intervals.set(id, handle);
+    _queueMicrotask(() => {
+      if (_intervals.has(id)) {
+        try {
+          callback(...args);
+        } catch (e) {
+          // Ignore timer callback errors
+        }
+      }
+    });
+    return handle;
+  };
+
+  globalThis.clearInterval = function(timer) {
+    const id = timer && timer._id !== undefined ? timer._id : timer;
+    _intervals.delete(id);
+  };
+
+  globalThis.setImmediate = function(callback, ...args) {
+    return globalThis.setTimeout(callback, 0, ...args);
+  };
+
+  globalThis.clearImmediate = function(id) {
+    globalThis.clearTimeout(id);
+  };
+
+  // Also expose queueMicrotask globally
+  if (typeof globalThis.queueMicrotask === 'undefined') {
+    globalThis.queueMicrotask = _queueMicrotask;
+  }
+
   return process;
 })();
 `;

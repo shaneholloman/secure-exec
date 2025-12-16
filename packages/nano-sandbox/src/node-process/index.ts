@@ -405,30 +405,44 @@ export class NodeProcess {
   /**
    * Set up dynamic import() function for ESM
    * Note: precompileDynamicImports must be called BEFORE running user code
+   * Falls back to require() for CommonJS modules when not pre-compiled
    */
   private async setupDynamicImport(
     context: ivm.Context,
     jail: ivm.Reference<Record<string, unknown>>
   ): Promise<void> {
-    // Create a SYNCHRONOUS reference for dynamic imports (returns from cache)
+    // Create a SYNCHRONOUS reference for dynamic imports (returns from cache or null if not found)
     const dynamicImportRef = new ivm.Reference((specifier: string) => {
       // Check the cache - look up both by specifier and resolved path
-      let ns = this.dynamicImportCache.get(specifier);
+      const ns = this.dynamicImportCache.get(specifier);
       if (!ns) {
-        throw new Error(
-          `Cannot dynamically import '${specifier}': module not pre-compiled. ` +
-            `Only string literal imports are supported, e.g., import('path'), not import(variable).`
-        );
+        // Return null to signal fallback to require()
+        return null;
       }
       return ns.derefInto();
     });
 
     await jail.set("_dynamicImport", dynamicImportRef);
 
-    // Create the __dynamicImport function in the isolate (uses sync lookup)
+    // Create the __dynamicImport function in the isolate
+    // First tries ESM cache, then falls back to require()
     await context.eval(`
       globalThis.__dynamicImport = function(specifier) {
-        return Promise.resolve(_dynamicImport.applySync(undefined, [specifier]));
+        // Try the ESM cache first
+        const cached = _dynamicImport.applySync(undefined, [specifier]);
+        if (cached !== null) {
+          return Promise.resolve(cached);
+        }
+        // Fall back to require() for CommonJS modules
+        try {
+          const mod = require(specifier);
+          // Wrap in ESM-like namespace object with default export
+          return Promise.resolve({ default: mod, ...mod });
+        } catch (e) {
+          return Promise.reject(new Error(
+            'Cannot dynamically import \\'' + specifier + '\\': ' + e.message
+          ));
+        }
       };
     `);
   }
@@ -501,12 +515,18 @@ export class NodeProcess {
     );
 
     // Create a reference for loading file content
+    // Also transforms dynamic import() calls to __dynamicImport()
     const loadFileRef = new ivm.Reference(
       async (path: string): Promise<string | null> => {
         if (!this.systemBridge) {
           return null;
         }
-        return loadFile(path, this.systemBridge);
+        const source = await loadFile(path, this.systemBridge);
+        if (source === null) {
+          return null;
+        }
+        // Transform dynamic import() to __dynamicImport() for V8 compatibility
+        return transformDynamicImport(source);
       }
     );
 
@@ -707,6 +727,15 @@ export class NodeProcess {
           return fsModule;
         }
 
+        // Special handling for fs/promises module
+        if (name === 'fs/promises') {
+          if (_moduleCache['fs/promises']) return _moduleCache['fs/promises'];
+          // Get fs module first, then extract promises
+          const fsModule = _requireFrom('fs', fromDir);
+          _moduleCache['fs/promises'] = fsModule.promises;
+          return fsModule.promises;
+        }
+
         // Special handling for child_process module
         if (name === 'child_process') {
           if (_moduleCache['child_process']) return _moduleCache['child_process'];
@@ -765,6 +794,68 @@ export class NodeProcess {
           }
           _moduleCache['module'] = _moduleModule;
           return _moduleModule;
+        }
+
+        // Stub for chalk (ESM module that npm uses for coloring)
+        // Provides no-color passthrough functionality
+        if (name === 'chalk') {
+          if (_moduleCache['chalk']) return _moduleCache['chalk'];
+
+          // Create a chainable chalk-like object that just returns the input
+          const createChalk = function(options) {
+            const chalk = function(...strings) {
+              return strings.join(' ');
+            };
+            chalk.level = options && options.level !== undefined ? options.level : 0;
+
+            // Make all style methods pass through
+            const styles = [
+              'reset', 'bold', 'dim', 'italic', 'underline', 'overline',
+              'inverse', 'hidden', 'strikethrough', 'visible',
+              'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', 'gray', 'grey',
+              'blackBright', 'redBright', 'greenBright', 'yellowBright', 'blueBright',
+              'magentaBright', 'cyanBright', 'whiteBright',
+              'bgBlack', 'bgRed', 'bgGreen', 'bgYellow', 'bgBlue', 'bgMagenta', 'bgCyan', 'bgWhite',
+              'bgBlackBright', 'bgRedBright', 'bgGreenBright', 'bgYellowBright',
+              'bgBlueBright', 'bgMagentaBright', 'bgCyanBright', 'bgWhiteBright'
+            ];
+
+            // Each style property returns chalk itself for chaining
+            const handler = {
+              get(target, prop) {
+                if (prop === 'level') return target.level;
+                if (styles.includes(prop)) return target;
+                if (typeof target[prop] === 'function') return target[prop].bind(target);
+                return target[prop];
+              }
+            };
+
+            return new Proxy(chalk, handler);
+          };
+
+          const chalk = createChalk();
+          chalk.Chalk = function Chalk(options) { return createChalk(options); };
+          chalk.supportsColor = { level: 0, hasBasic: false, has256: false, has16m: false };
+          chalk.stderr = createChalk();
+          chalk.stderr.supportsColor = { level: 0, hasBasic: false, has256: false, has16m: false };
+
+          _moduleCache['chalk'] = chalk;
+          return chalk;
+        }
+
+        // Stub for supports-color (ESM module that chalk uses)
+        if (name === 'supports-color') {
+          if (_moduleCache['supports-color']) return _moduleCache['supports-color'];
+
+          const colorSupport = { level: 0, hasBasic: false, has256: false, has16m: false };
+          const supportsColor = {
+            stdout: false,
+            stderr: false,
+            createSupportsColor: function() { return colorSupport; }
+          };
+
+          _moduleCache['supports-color'] = supportsColor;
+          return supportsColor;
         }
 
         // Try to load polyfill first (for built-in modules like path, events, etc.)
@@ -837,7 +928,7 @@ export class NodeProcess {
         try {
           // Wrap and execute the code
           const wrapper = new Function(
-            'exports', 'require', 'module', '__filename', '__dirname',
+            'exports', 'require', 'module', '__filename', '__dirname', '__dynamicImport',
             source
           );
 
@@ -849,12 +940,34 @@ export class NodeProcess {
             return _resolveModule.applySyncPromise(undefined, [request, module.dirname]);
           };
 
+          // Create a module-local __dynamicImport that resolves from this module's directory
+          const moduleDynamicImport = function(specifier) {
+            // Try the ESM cache first via the global helper
+            if (typeof _dynamicImport !== 'undefined') {
+              const cached = _dynamicImport.applySync(undefined, [specifier]);
+              if (cached !== null) {
+                return Promise.resolve(cached);
+              }
+            }
+            // Fall back to require() from this module's directory
+            try {
+              const mod = _requireFrom(specifier, module.dirname);
+              // Wrap in ESM-like namespace object with default export
+              return Promise.resolve({ default: mod, ...mod });
+            } catch (e) {
+              return Promise.reject(new Error(
+                'Cannot dynamically import \\'' + specifier + '\\': ' + e.message
+              ));
+            }
+          };
+
           wrapper(
             module.exports,
             moduleRequire,
             module,
             resolved,
-            module.dirname
+            module.dirname,
+            moduleDynamicImport
           );
 
           module.loaded = true;
@@ -1151,8 +1264,28 @@ export class NodeProcess {
         // Now set up the dynamic import function (uses pre-compiled cache)
         await this.setupDynamicImport(context, jail);
 
-        const script = await this.isolate.compileScript(transformedCode);
+        // Wrap code to capture the result in a global and await if it's a promise
+        const wrappedCode = `
+          globalThis.__scriptResult__ = (function() {
+            ${transformedCode}
+          })();
+        `;
+        const script = await this.isolate.compileScript(wrappedCode);
         await script.run(context);
+
+        // If the script returned a promise, await it
+        await context.eval(`
+          (async function() {
+            if (globalThis.__scriptResult__ && typeof globalThis.__scriptResult__.then === 'function') {
+              try {
+                await globalThis.__scriptResult__;
+              } catch (e) {
+                // Let error handling below catch this
+                throw e;
+              }
+            }
+          })()
+        `);
       }
 
       // Get exit code from process.exitCode if set
