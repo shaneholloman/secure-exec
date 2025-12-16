@@ -2,7 +2,5 @@ target/
 *.webc
 Cargo.lock
 
-# Bundled npm (downloaded at build time)
-npm/
-usr/
-etc/
+# Build output (npm filesystem bundle)
+dist/

@@ -7,11 +7,12 @@ description = "WASIX runtime with Node.js shim using file-based IPC polling"
 "sharrattj/coreutils" = "1.0.16"
 "sharrattj/bash" = "*"
 
-# Bundle npm and system directories into the package filesystem
+# Bundle npm into the package filesystem
 [fs]
-"/usr/lib/node_modules/npm" = "usr/lib/node_modules/npm"
-"/usr/bin" = "usr/bin"
-"/etc" = "etc"
+"/usr/lib/node_modules/npm" = "dist/usr/lib/node_modules/npm"
+"/usr/bin/npm" = "dist/usr/bin/npm"
+"/usr/bin/npx" = "dist/usr/bin/npx"
+"/etc/npmrc" = "dist/etc/npmrc"
 
 [[module]]
 name = "wasix-runtime"
