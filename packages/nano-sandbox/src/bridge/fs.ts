@@ -9,6 +9,9 @@ import type * as nodeFs from "fs";
 declare const _fs: {
   readFile: { applySyncPromise: (ctx: undefined, args: [string]) => string };
   writeFile: { applySync: (ctx: undefined, args: [string, string]) => void };
+  // Binary file operations use base64 encoding for transfer across isolate boundary
+  readFileBinary: { applySyncPromise: (ctx: undefined, args: [string]) => string }; // Returns base64
+  writeFileBinary: { applySync: (ctx: undefined, args: [string, string]) => void }; // Takes base64
   readDir: { applySyncPromise: (ctx: undefined, args: [string]) => string };
   mkdir: { applySync: (ctx: undefined, args: [string, boolean]) => void };
   rmdir: { applySyncPromise: (ctx: undefined, args: [string]) => void };
@@ -282,9 +285,17 @@ const fs = {
     if (!pathStr) throw createFsError("EBADF", "EBADF: bad file descriptor", "read");
     const encoding =
       typeof options === "string" ? options : (options as { encoding?: BufferEncoding | null })?.encoding;
-    let content: string;
+
     try {
-      content = _fs.readFile.applySyncPromise(undefined, [pathStr]);
+      if (encoding) {
+        // Text mode - use text read
+        const content = _fs.readFile.applySyncPromise(undefined, [pathStr]);
+        return content;
+      } else {
+        // Binary mode - use binary read with base64 encoding
+        const base64Content = _fs.readFileBinary.applySyncPromise(undefined, [pathStr]);
+        return Buffer.from(base64Content, "base64");
+      }
     } catch (err) {
       // Convert "entry not found" and similar errors to proper ENOENT
       const errMsg = (err as Error).message || String(err);
@@ -298,9 +309,6 @@ const fs = {
       }
       throw err;
     }
-    if (encoding) return content;
-    // Return Buffer if no encoding specified
-    return Buffer.from(content);
   },
 
   writeFileSync(
@@ -310,13 +318,19 @@ const fs = {
   ): void {
     const pathStr = typeof file === "number" ? fdTable.get(file)?.path : toPathString(file);
     if (!pathStr) throw createFsError("EBADF", "EBADF: bad file descriptor", "write");
-    const content =
-      typeof data === "string"
-        ? data
-        : ArrayBuffer.isView(data)
-          ? new TextDecoder().decode(data)
-          : String(data);
-    _fs.writeFile.applySync(undefined, [pathStr, content]);
+
+    if (typeof data === "string") {
+      // Text mode - use text write
+      _fs.writeFile.applySync(undefined, [pathStr, data]);
+    } else if (ArrayBuffer.isView(data)) {
+      // Binary mode - convert to base64 and use binary write
+      const uint8 = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      const base64 = Buffer.from(uint8).toString("base64");
+      _fs.writeFileBinary.applySync(undefined, [pathStr, base64]);
+    } else {
+      // Fallback to text mode
+      _fs.writeFile.applySync(undefined, [pathStr, String(data)]);
+    }
   },
 
   appendFileSync(
@@ -1067,18 +1081,31 @@ const fs = {
     emit: (event: string) => boolean;
     writable: boolean;
   } {
-    let content = "";
+    // Collect chunks as binary data to preserve binary content
+    const chunks: Uint8Array[] = [];
     const listeners: Record<string, Array<() => void>> = {};
     const stream = {
       writable: true,
       write(chunk: string | Uint8Array): boolean {
-        content +=
-          typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+        if (typeof chunk === "string") {
+          chunks.push(Buffer.from(chunk, "utf8"));
+        } else {
+          chunks.push(new Uint8Array(chunk));
+        }
         return true;
       },
       end(chunk?: string | Uint8Array): void {
         if (chunk) stream.write(chunk);
-        fs.writeFileSync(path, content);
+        // Concatenate all chunks into a single buffer
+        const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+        const result = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const c of chunks) {
+          result.set(c, offset);
+          offset += c.length;
+        }
+        // Write as binary data
+        fs.writeFileSync(path, result);
         stream.writable = false;
         // Emit finish and close events
         // Use Promise.resolve() for async microtask instead of setTimeout

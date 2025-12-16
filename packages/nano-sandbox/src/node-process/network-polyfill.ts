@@ -196,7 +196,7 @@ export function generateNetworkPolyfill(): string {
 
   // HTTP module polyfill (minimal)
   function createHttpModule(protocol) {
-    // IncomingMessage stub
+    // IncomingMessage stub - implements Node.js Readable stream interface
     class IncomingMessage {
       constructor(response) {
         this.headers = response?.headers || {};
@@ -217,25 +217,58 @@ export function generateNetworkPolyfill(): string {
         this.statusMessage = response?.statusText;
         this._body = response?.body || '';
         this._listeners = {};
-        this.complete = true;
+        this.complete = false;
         this.aborted = false;
         this.socket = null;
+        this._bodyConsumed = false;
+        this._ended = false;
+        this._flowing = false;
+        this.readable = true;
+        this.readableEnded = false;
+        this.readableFlowing = null;
       }
 
       on(event, listener) {
         if (!this._listeners[event]) this._listeners[event] = [];
         this._listeners[event].push(listener);
 
-        // Auto-emit data and end for response body using Promise microtask
-        if (event === 'data' && this._body) {
+        // When 'data' listener is added, start flowing mode
+        if (event === 'data' && !this._bodyConsumed && this._body) {
+          this._flowing = true;
+          this.readableFlowing = true;
+          // Emit data in next microtask
           Promise.resolve().then(() => {
-            const buf = typeof Buffer !== 'undefined' ? Buffer.from(this._body) : this._body;
-            listener(buf);
+            if (!this._bodyConsumed) {
+              this._bodyConsumed = true;
+              const buf = typeof Buffer !== 'undefined' ? Buffer.from(this._body) : this._body;
+              this.emit('data', buf);
+              // Emit end after data
+              Promise.resolve().then(() => {
+                if (!this._ended) {
+                  this._ended = true;
+                  this.complete = true;
+                  this.readable = false;
+                  this.readableEnded = true;
+                  this.emit('end');
+                }
+              });
+            }
           });
         }
-        if (event === 'end') {
-          Promise.resolve().then(() => listener());
+
+        // If 'end' listener is added after data was already consumed, emit end
+        if (event === 'end' && this._bodyConsumed && !this._ended) {
+          Promise.resolve().then(() => {
+            if (!this._ended) {
+              this._ended = true;
+              this.complete = true;
+              this.readable = false;
+              this.readableEnded = true;
+              listener();
+            }
+          });
         }
+
         return this;
       }
 
@@ -244,21 +277,39 @@ export function generateNetworkPolyfill(): string {
           this.off(event, wrapper);
           listener(...args);
         };
+        wrapper._originalListener = listener;
         return this.on(event, wrapper);
       }
 
       off(event, listener) {
         if (this._listeners[event]) {
-          const idx = this._listeners[event].indexOf(listener);
+          const idx = this._listeners[event].findIndex(fn =>
+            fn === listener || fn._originalListener === listener
+          );
           if (idx !== -1) this._listeners[event].splice(idx, 1);
         }
         return this;
       }
 
-      emit(event, ...args) {
-        if (this._listeners[event]) {
-          this._listeners[event].forEach(fn => fn(...args));
+      removeListener(event, listener) {
+        return this.off(event, listener);
+      }
+
+      removeAllListeners(event) {
+        if (event) {
+          delete this._listeners[event];
+        } else {
+          this._listeners = {};
         }
+        return this;
+      }
+
+      emit(event, ...args) {
+        const handlers = this._listeners[event];
+        if (handlers) {
+          handlers.slice().forEach(fn => fn(...args));
+        }
+        return handlers && handlers.length > 0;
       }
 
       setEncoding(encoding) {
@@ -271,38 +322,114 @@ export function generateNetworkPolyfill(): string {
         if (this._bodyConsumed) return null;
         this._bodyConsumed = true;
         const buf = typeof Buffer !== 'undefined' ? Buffer.from(this._body) : this._body;
+        // Schedule end event
+        Promise.resolve().then(() => {
+          if (!this._ended) {
+            this._ended = true;
+            this.complete = true;
+            this.readable = false;
+            this.readableEnded = true;
+            this.emit('end');
+          }
+        });
         return buf;
       }
 
       pipe(dest) {
         // Pipe body data to destination
-        if (this._body) {
-          const buf = typeof Buffer !== 'undefined' ? Buffer.from(this._body) : this._body;
-          if (typeof dest.write === 'function') {
-            dest.write(buf);
-          }
-          if (typeof dest.end === 'function') {
-            dest.end();
-          }
+        const buf = typeof Buffer !== 'undefined' ? Buffer.from(this._body || '') : (this._body || '');
+        if (typeof dest.write === 'function' && buf.length > 0) {
+          dest.write(buf);
         }
+        if (typeof dest.end === 'function') {
+          Promise.resolve().then(() => dest.end());
+        }
+        this._bodyConsumed = true;
+        this._ended = true;
+        this.complete = true;
+        this.readable = false;
+        this.readableEnded = true;
         return dest;
       }
 
-      pause() { return this; }
-      resume() { return this; }
-      unpipe() { return this; }
-      destroy() { return this; }
+      pause() {
+        this._flowing = false;
+        this.readableFlowing = false;
+        return this;
+      }
+
+      resume() {
+        this._flowing = true;
+        this.readableFlowing = true;
+        // If body not consumed, emit data now
+        if (!this._bodyConsumed && this._body) {
+          Promise.resolve().then(() => {
+            if (!this._bodyConsumed) {
+              this._bodyConsumed = true;
+              const buf = typeof Buffer !== 'undefined' ? Buffer.from(this._body) : this._body;
+              this.emit('data', buf);
+              Promise.resolve().then(() => {
+                if (!this._ended) {
+                  this._ended = true;
+                  this.complete = true;
+                  this.readable = false;
+                  this.readableEnded = true;
+                  this.emit('end');
+                }
+              });
+            }
+          });
+        }
+        return this;
+      }
+
+      unpipe(dest) { return this; }
+
+      destroy(err) {
+        this.destroyed = true;
+        this.readable = false;
+        if (err) this.emit('error', err);
+        this.emit('close');
+        return this;
+      }
 
       // Make it iterable/async iterable for minipass
       [Symbol.asyncIterator]() {
-        const body = this._body;
-        let consumed = false;
+        const self = this;
+        let dataEmitted = false;
+        let ended = false;
+
         return {
           async next() {
-            if (consumed) return { done: true, value: undefined };
-            consumed = true;
-            const buf = typeof Buffer !== 'undefined' ? Buffer.from(body) : body;
-            return { done: false, value: buf };
+            // If already ended, return done
+            if (ended || self._ended) {
+              return { done: true, value: undefined };
+            }
+
+            // If data not emitted yet, return the body
+            if (!dataEmitted && !self._bodyConsumed) {
+              dataEmitted = true;
+              self._bodyConsumed = true;
+              const buf = typeof Buffer !== 'undefined' ? Buffer.from(self._body || '') : (self._body || '');
+              return { done: false, value: buf };
+            }
+
+            // Signal end
+            ended = true;
+            self._ended = true;
+            self.complete = true;
+            self.readable = false;
+            self.readableEnded = true;
+            return { done: true, value: undefined };
+          },
+          return() {
+            ended = true;
+            return Promise.resolve({ done: true, value: undefined });
+          },
+          throw(err) {
+            ended = true;
+            self.emit('error', err);
+            return Promise.resolve({ done: true, value: undefined });
           }
         };
       }

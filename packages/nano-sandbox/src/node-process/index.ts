@@ -11,6 +11,7 @@ import { generateChildProcessPolyfill } from "./child-process-polyfill.js";
 import { generateNetworkPolyfill } from "./network-polyfill.js";
 import { generateOSPolyfill, type OSConfig } from "./os-polyfill.js";
 import { generateModulePolyfill } from "./module-polyfill.js";
+import { generateZlibPolyfill } from "./zlib-polyfill.js";
 
 // Interface for command executor (like WasixInstance)
 export interface CommandExecutor {
@@ -486,6 +487,11 @@ export class NodeProcess {
           return null;
         }
 
+        // zlib module is handled specially with our own polyfill
+        if (name === "zlib") {
+          return null;
+        }
+
         // module is handled specially with our own polyfill
         if (name === "module") {
           return null;
@@ -545,6 +551,17 @@ export class NodeProcess {
       const writeFileRef = new ivm.Reference((path: string, content: string) => {
         bridge.writeFile(path, content);
       });
+      // Binary file operations using base64 encoding
+      const readFileBinaryRef = new ivm.Reference(async (path: string) => {
+        const data = await bridge.readFileBinary(path);
+        // Convert to base64 for transfer across isolate boundary
+        return Buffer.from(data).toString("base64");
+      });
+      const writeFileBinaryRef = new ivm.Reference((path: string, base64Content: string) => {
+        // Decode base64 and write as binary
+        const data = Buffer.from(base64Content, "base64");
+        bridge.writeFile(path, data);
+      });
       const readDirRef = new ivm.Reference(async (path: string) => {
         const entries = await bridge.readDirWithTypes(path);
         // Return as JSON string for transfer
@@ -582,6 +599,8 @@ export class NodeProcess {
       // Set up each fs Reference individually in the isolate
       await jail.set("_fsReadFile", readFileRef);
       await jail.set("_fsWriteFile", writeFileRef);
+      await jail.set("_fsReadFileBinary", readFileBinaryRef);
+      await jail.set("_fsWriteFileBinary", writeFileBinaryRef);
       await jail.set("_fsReadDir", readDirRef);
       await jail.set("_fsMkdir", mkdirRef);
       await jail.set("_fsRmdir", rmdirRef);
@@ -595,6 +614,8 @@ export class NodeProcess {
         globalThis._fs = {
           readFile: _fsReadFile,
           writeFile: _fsWriteFile,
+          readFileBinary: _fsReadFileBinary,
+          writeFileBinary: _fsWriteFileBinary,
           readDir: _fsReadDir,
           mkdir: _fsMkdir,
           rmdir: _fsRmdir,
@@ -681,6 +702,10 @@ export class NodeProcess {
     // Initialize os polyfill (always available)
     const osPolyfillCode = generateOSPolyfill(this.osConfig);
     await context.eval(osPolyfillCode);
+
+    // Initialize zlib polyfill (always available)
+    const zlibPolyfillCode = generateZlibPolyfill();
+    await context.eval(zlibPolyfillCode);
 
     // Initialize module polyfill (must be after require system is set up)
     // We'll eval it after setting up _requireFrom and _resolveModule
@@ -784,6 +809,16 @@ export class NodeProcess {
           }
           _moduleCache['os'] = _osModule;
           return _osModule;
+        }
+
+        // Special handling for zlib module
+        if (name === 'zlib') {
+          if (_moduleCache['zlib']) return _moduleCache['zlib'];
+          if (typeof _zlibModule === 'undefined') {
+            throw new Error('zlib module not initialized');
+          }
+          _moduleCache['zlib'] = _zlibModule;
+          return _zlibModule;
         }
 
         // Special handling for module module
@@ -961,6 +996,42 @@ export class NodeProcess {
             if (result.posix === null || result.posix === undefined) {
               result.posix = result;
             }
+            // Patch resolve to ensure it uses process.cwd() correctly
+            // path-browserify's resolve captures process at require time
+            // which may not be set up yet; wrap it to use current process
+            const originalResolve = result.resolve;
+            result.resolve = function resolve() {
+              // If no arguments or all arguments are relative, prepend cwd
+              // to ensure correct resolution
+              const args = Array.from(arguments);
+              if (args.length === 0 || !args.some(a => typeof a === 'string' && a.length > 0 && a.charAt(0) === '/')) {
+                // Check if process.cwd exists and returns a valid path
+                if (typeof process !== 'undefined' && typeof process.cwd === 'function') {
+                  const cwd = process.cwd();
+                  if (cwd && cwd.charAt(0) === '/') {
+                    // Prepend cwd to args
+                    args.unshift(cwd);
+                  }
+                }
+              }
+              return originalResolve.apply(this, args);
+            };
+            // Also patch posix.resolve
+            if (result.posix && result.posix.resolve) {
+              const originalPosixResolve = result.posix.resolve;
+              result.posix.resolve = function resolve() {
+                const args = Array.from(arguments);
+                if (args.length === 0 || !args.some(a => typeof a === 'string' && a.length > 0 && a.charAt(0) === '/')) {
+                  if (typeof process !== 'undefined' && typeof process.cwd === 'function') {
+                    const cwd = process.cwd();
+                    if (cwd && cwd.charAt(0) === '/') {
+                      args.unshift(cwd);
+                    }
+                  }
+                }
+                return originalPosixResolve.apply(this, args);
+              };
+            }
           }
           if (typeof result === 'object' && result !== null) {
             Object.assign(moduleObj.exports, result);
@@ -1108,6 +1179,15 @@ export class NodeProcess {
       const writeFileRef = new ivm.Reference((path: string, content: string) => {
         bridge.writeFile(path, content);
       });
+      // Binary file operations using base64 encoding
+      const readFileBinaryRef = new ivm.Reference(async (path: string) => {
+        const data = await bridge.readFileBinary(path);
+        return Buffer.from(data).toString("base64");
+      });
+      const writeFileBinaryRef = new ivm.Reference((path: string, base64Content: string) => {
+        const data = Buffer.from(base64Content, "base64");
+        bridge.writeFile(path, data);
+      });
       const readDirRef = new ivm.Reference(async (path: string) => {
         const entries = await bridge.readDirWithTypes(path);
         return JSON.stringify(entries);
@@ -1142,6 +1222,8 @@ export class NodeProcess {
 
       await jail.set("_fsReadFile", readFileRef);
       await jail.set("_fsWriteFile", writeFileRef);
+      await jail.set("_fsReadFileBinary", readFileBinaryRef);
+      await jail.set("_fsWriteFileBinary", writeFileBinaryRef);
       await jail.set("_fsReadDir", readDirRef);
       await jail.set("_fsMkdir", mkdirRef);
       await jail.set("_fsRmdir", rmdirRef);
@@ -1154,6 +1236,8 @@ export class NodeProcess {
         globalThis._fs = {
           readFile: _fsReadFile,
           writeFile: _fsWriteFile,
+          readFileBinary: _fsReadFileBinary,
+          writeFileBinary: _fsWriteFileBinary,
           readDir: _fsReadDir,
           mkdir: _fsMkdir,
           rmdir: _fsRmdir,

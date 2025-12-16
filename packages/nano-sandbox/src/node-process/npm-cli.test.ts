@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeAll } from "vitest";
 import { init, Directory } from "@wasmer/sdk/node";
-import { NodeProcess } from "./index";
+import { NodeProcess, type NetworkAdapter } from "./index";
 import { SystemBridge } from "../system-bridge/index";
 import * as fs from "fs";
 import * as path from "path";
@@ -731,59 +731,34 @@ describe("NPM CLI Integration", () => {
         };
 
         // Mock network adapter that responds to ping requests
-        const mockNetworkAdapter = {
-          async fetch(url: string, options?: { method?: string; headers?: Record<string, string>; body?: string | null }) {
+        const mockNetworkAdapter: NetworkAdapter = {
+          async fetch(url, options) {
             console.log("[Network] fetch:", url, options?.method || "GET");
-
-            // npm ping hits /-/ping endpoint
-            if (url.includes("/-/ping")) {
-              return {
-                ok: true,
-                status: 200,
-                statusText: "OK",
-                headers: {
-                  "npm-notice": "Welcome to npm!",
-                },
-                body: "{}",
-                url,
-                redirected: false,
-              };
-            }
-
-            // Default response for other requests
+            const headers: Record<string, string> = url.includes("/-/ping")
+              ? { "npm-notice": "Welcome to npm!" }
+              : { "content-type": "application/json" };
             return {
               ok: true,
               status: 200,
               statusText: "OK",
-              headers: {},
+              headers,
               body: "{}",
               url,
               redirected: false,
             };
           },
-          async dnsLookup(hostname: string) {
+          async dnsLookup(hostname) {
             return { address: "104.16.0.1", family: 4 };
           },
-          async httpRequest(url: string, options?: { method?: string; headers?: Record<string, string>; body?: string | null }) {
+          async httpRequest(url, options) {
             console.log("[Network] httpRequest:", url, options?.method || "GET");
-
-            // npm ping hits /-/ping endpoint
-            if (url.includes("/-/ping")) {
-              return {
-                status: 200,
-                statusText: "OK",
-                headers: {
-                  "npm-notice": "Welcome to npm!",
-                },
-                body: "{}",
-                url,
-              };
-            }
-
+            const headers: Record<string, string> = url.includes("/-/ping")
+              ? { "npm-notice": "Welcome to npm!" }
+              : { "content-type": "application/json" };
             return {
               status: 200,
               statusText: "OK",
-              headers: {},
+              headers,
               body: "{}",
               url,
             };
@@ -1351,8 +1326,9 @@ describe("NPM CLI Integration", () => {
 
         // Create mock network adapter that returns real-looking responses
         const mockNetworkAdapter: NetworkAdapter = {
-          async fetch(url: string, options?: RequestInit) {
+          async fetch(url, options) {
             console.log("[Network] fetch:", url, options?.method || "GET");
+            const headers: Record<string, string> = { "content-type": "application/json" };
 
             // Mock the registry response for is-number
             if (url.includes("registry.npmjs.org/is-number")) {
@@ -1360,7 +1336,7 @@ describe("NPM CLI Integration", () => {
                 ok: true,
                 status: 200,
                 statusText: "OK",
-                headers: { "content-type": "application/json" },
+                headers,
                 body: JSON.stringify({
                   name: "is-number",
                   "dist-tags": { latest: "7.0.0" },
@@ -1378,6 +1354,7 @@ describe("NPM CLI Integration", () => {
                   },
                 }),
                 url,
+                redirected: false,
               };
             }
 
@@ -1386,23 +1363,25 @@ describe("NPM CLI Integration", () => {
               ok: true,
               status: 200,
               statusText: "OK",
-              headers: {},
+              headers,
               body: "{}",
               url,
+              redirected: false,
             };
           },
-          async dnsLookup(hostname: string) {
+          async dnsLookup(hostname) {
             return { address: "127.0.0.1", family: 4 };
           },
-          async httpRequest(url: string, options?: string) {
+          async httpRequest(url, options) {
             console.log("[Network] httpRequest:", url);
+            const headers: Record<string, string> = { "content-type": "application/json" };
 
             // Mock registry metadata
             if (url.includes("registry.npmjs.org/is-number") && !url.includes(".tgz")) {
               return {
                 status: 200,
                 statusText: "OK",
-                headers: { "content-type": "application/json" },
+                headers,
                 body: JSON.stringify({
                   name: "is-number",
                   "dist-tags": { latest: "7.0.0" },
@@ -1424,14 +1403,12 @@ describe("NPM CLI Integration", () => {
             }
 
             // Mock tarball download - return a minimal valid gzipped tarball
-            // For now, return empty to see if we get past metadata fetching
             if (url.includes(".tgz")) {
               console.log("[Network] Tarball request:", url);
-              // Return minimal response - actual tarball handling TBD
               return {
                 status: 200,
                 statusText: "OK",
-                headers: { "content-type": "application/octet-stream" },
+                headers: { "content-type": "application/octet-stream" } as Record<string, string>,
                 body: "",
                 url,
               };
@@ -1440,7 +1417,7 @@ describe("NPM CLI Integration", () => {
             return {
               status: 200,
               statusText: "OK",
-              headers: {},
+              headers,
               body: "{}",
               url,
             };
