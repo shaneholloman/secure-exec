@@ -1402,18 +1402,18 @@ const fs = {
     return new WriteStream(pathStr, opts) as unknown as nodeFs.WriteStream;
   },
 
-  // Watch (no-op)
-  watch(): { close: () => void; on: () => unknown } {
-    return {
-      close() {},
-      on() {
-        return this;
-      },
-    };
+  // Watch - not implemented
+  watch(): never {
+    throw new Error("fs.watch is not implemented in sandbox");
   },
 
-  watchFile(): void {},
-  unwatchFile(): void {},
+  watchFile(): never {
+    throw new Error("fs.watchFile is not implemented in sandbox");
+  },
+
+  unwatchFile(): never {
+    throw new Error("fs.unwatchFile is not implemented in sandbox");
+  },
 };
 
 // Type check: validate that our fs implementation has compatible method signatures

@@ -3,16 +3,24 @@
 ## fs-polyfill
 - inline compiled code at build time instead of runtime fs.readFileSync()
 - add dedicated test suite for the package
-- implement watch(), watchFile(), unwatchFile() (currently no-ops)
+- implement watch(), watchFile(), unwatchFile() (currently throws "not implemented")
 - implement proper stream behavior for createReadStream/createWriteStream (backpressure, events)
+- implement fs.compose() (currently throws "not implemented")
 - improve binary file handling (currently text-based internally)
 
 ## Node.js polyfills
-- child_process - not available
-- net, dgram, http, https - not available (no network in sandbox)
 - worker_threads - not available
-- crypto - limited polyfill (not full Node.js crypto)
+- crypto.subtle (Web Crypto API) - requires native crypto, not available in isolated-vm
+- http.Agent / https.Agent - connection pooling not supported (currently throws "not implemented")
+- module.SourceMap - source map parsing not implemented (currently throws "not implemented")
+- child_process streams - stdin/stdout/stderr are simplified stubs (buffer everything, emit on completion)
 - read Node.js API docs (https://nodejs.org/api/all.json) and write a script to verify import/exports match official Node.js modules (could use TypeScript types)
+
+## Intentionally not implemented (sandbox security)
+- child_process.fork - IPC between processes not supported
+- http.createServer / https.createServer - no server mode in sandbox
+- process.dlopen - dynamic loading not supported
+- .node native extensions - native modules not supported
 
 ## WASM/bash
 - batch commands hang - `bash -c "echo hello"` never returns from instance.wait() in WASI/WASIX bash. interactive mode works fine

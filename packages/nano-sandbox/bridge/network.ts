@@ -694,10 +694,10 @@ export class ClientRequest {
   }
 }
 
-// Agent class stub
+// Agent class - not implemented (connection pooling not supported in sandbox)
 class Agent {
   constructor() {
-    // no-op
+    throw new Error("http.Agent is not implemented in sandbox (connection pooling not supported)");
   }
 }
 

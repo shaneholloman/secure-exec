@@ -2903,19 +2903,15 @@ var bridge = (() => {
       const opts = typeof options === "string" ? { encoding: options } : options;
       return new WriteStream(pathStr, opts);
     },
-    // Watch (no-op)
+    // Watch - not implemented
     watch() {
-      return {
-        close() {
-        },
-        on() {
-          return this;
-        }
-      };
+      throw new Error("fs.watch is not implemented in sandbox");
     },
     watchFile() {
+      throw new Error("fs.watchFile is not implemented in sandbox");
     },
     unwatchFile() {
+      throw new Error("fs.unwatchFile is not implemented in sandbox");
     }
   };
   var fs_default = fs;
@@ -3559,28 +3555,8 @@ var bridge = (() => {
     }
     return typeof result.stdout === "string" ? result.stdout : result.stdout.toString(opts.encoding);
   }
-  function fork(modulePath, args, options) {
-    let argsArray = [];
-    let opts = {};
-    if (!Array.isArray(args)) {
-      opts = args || {};
-    } else {
-      argsArray = args;
-      opts = options || {};
-    }
-    const child = spawn("node", [modulePath, ...argsArray], {
-      ...opts,
-      stdio: opts.stdio || "pipe"
-    });
-    child.send = function(_message, sendHandle, _options, callback) {
-      if (typeof sendHandle === "function") {
-        callback = sendHandle;
-      }
-      if (callback) callback(null);
-      return true;
-    };
-    child.connected = true;
-    return child;
+  function fork(_modulePath, _args, _options) {
+    throw new Error("child_process.fork is not implemented in sandbox (IPC not supported)");
   }
   var childProcess = {
     ChildProcess,
@@ -4131,6 +4107,7 @@ var bridge = (() => {
   };
   var Agent = class {
     constructor() {
+      throw new Error("http.Agent is not implemented in sandbox (connection pooling not supported)");
     }
   };
   function createHttpModule(_protocol) {
@@ -5440,18 +5417,17 @@ var bridge = (() => {
     }
   };
   var SourceMap = class {
-    _payload;
-    constructor(payload) {
-      this._payload = payload;
+    constructor(_payload) {
+      throw new Error("SourceMap is not implemented in sandbox");
     }
     get payload() {
-      return this._payload;
+      throw new Error("SourceMap is not implemented in sandbox");
     }
-    set payload(value) {
-      this._payload = value;
+    set payload(_value) {
+      throw new Error("SourceMap is not implemented in sandbox");
     }
     findEntry(_line, _column) {
-      return {};
+      throw new Error("SourceMap is not implemented in sandbox");
     }
   };
   var moduleModule = {

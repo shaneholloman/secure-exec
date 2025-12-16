@@ -554,45 +554,13 @@ function execFileSync(
   return typeof result.stdout === "string" ? result.stdout : result.stdout.toString(opts.encoding as BufferEncoding);
 }
 
-// fork - spawn a node process with IPC
+// fork - intentionally not implemented (IPC between processes not supported in sandbox)
 function fork(
-  modulePath: string,
-  args?: readonly string[] | nodeChildProcess.ForkOptions,
-  options?: nodeChildProcess.ForkOptions
-): ChildProcess {
-  let argsArray: string[] = [];
-  let opts: nodeChildProcess.ForkOptions = {};
-
-  if (!Array.isArray(args)) {
-    opts = (args as nodeChildProcess.ForkOptions) || {};
-  } else {
-    argsArray = args as string[];
-    opts = options || {};
-  }
-
-  // Fork executes a node script - we use spawn with node
-  const child = spawn("node", [modulePath, ...argsArray], {
-    ...opts,
-    stdio: opts.stdio || "pipe",
-  } as nodeChildProcess.SpawnOptions);
-
-  // Add IPC-like methods (stubs)
-  (child as ChildProcess & { send: (message: unknown, sendHandle?: unknown, options?: unknown, callback?: (error: Error | null) => void) => boolean }).send = function (
-    _message: unknown,
-    sendHandle?: unknown,
-    _options?: unknown,
-    callback?: (error: Error | null) => void
-  ): boolean {
-    if (typeof sendHandle === "function") {
-      callback = sendHandle as (error: Error | null) => void;
-    }
-    if (callback) callback(null);
-    return true;
-  };
-
-  child.connected = true;
-
-  return child;
+  _modulePath: string,
+  _args?: readonly string[] | nodeChildProcess.ForkOptions,
+  _options?: nodeChildProcess.ForkOptions
+): never {
+  throw new Error("child_process.fork is not implemented in sandbox (IPC not supported)");
 }
 
 // Create the child_process module

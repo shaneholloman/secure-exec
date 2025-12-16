@@ -363,24 +363,22 @@ export class Module {
   }
 }
 
-// SourceMap class stub
+// SourceMap class - not implemented
 export class SourceMap {
-  private _payload: unknown;
-
-  constructor(payload: unknown) {
-    this._payload = payload;
+  constructor(_payload: unknown) {
+    throw new Error("SourceMap is not implemented in sandbox");
   }
 
-  get payload(): unknown {
-    return this._payload;
+  get payload(): never {
+    throw new Error("SourceMap is not implemented in sandbox");
   }
 
-  set payload(value: unknown) {
-    this._payload = value;
+  set payload(_value: unknown) {
+    throw new Error("SourceMap is not implemented in sandbox");
   }
 
-  findEntry(_line: number, _column: number): Record<string, unknown> {
-    return {};
+  findEntry(_line: number, _column: number): never {
+    throw new Error("SourceMap is not implemented in sandbox");
   }
 }
 
