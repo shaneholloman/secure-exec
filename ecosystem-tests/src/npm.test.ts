@@ -46,12 +46,26 @@ describe("NPM CLI Integration", () => {
       }
     });
 
-    // Set up process.argv for npm
+    // Load npm module FIRST, then set argv (require resets process.argv)
+    const Npm = require('/data/opt/npm/lib/npm.js');
+
+    // Set up process.argv for npm AFTER require
     process.argv = ['node', 'npm', ${args.map((a) => JSON.stringify(a)).join(", ")}];
 
-    // Load npm's CLI entry point
-    const npmCli = require('${npmCliPath}');
-    await npmCli(process);
+    const npm = new Npm();
+    const { exec, command, args: npmArgs } = await npm.load();
+
+    if (!exec) {
+      return;
+    }
+
+    if (!command) {
+      console.log(npm.usage);
+      process.exitCode = 1;
+      return;
+    }
+
+    await npm.exec(command, npmArgs);
   } catch (e) {
     // Some npm errors are expected (like formatWithOptions not being a function)
     if (!e.message.includes('formatWithOptions') &&
@@ -135,7 +149,7 @@ describe("NPM CLI Integration", () => {
 		);
 	});
 
-	describe.skip("Step 3: npm ls", () => {
+	describe("Step 3: npm ls", () => {
 		it(
 			"should run npm ls and show package tree",
 			async () => {
@@ -165,7 +179,7 @@ describe("NPM CLI Integration", () => {
 					}),
 				);
 
-				const result = await runNpm(vm, ["ls"]);
+				const result = await runNpm(vm, ["ls", "--prefix", "/data/app"]);
 
 				console.log("stdout:", result.stdout);
 				console.log("stderr:", result.stderr);
