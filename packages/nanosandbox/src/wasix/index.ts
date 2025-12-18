@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Directory, init, initializeLogger, Wasmer } from "@wasmer/sdk/node";
+import { Directory, init, Wasmer } from "@wasmer/sdk/node";
 import type { NodeProcess } from "sandboxed-node";
 
 /** Type for a wasmer command from a loaded package */
@@ -73,11 +73,9 @@ export class WasixInstance {
 		if (this.initialized) return;
 
 		if (!wasmerInitialized) {
-			await init();
-			// Enable wasmer debug logging (uses Rust tracing-subscriber EnvFilter format)
+			// Enable wasmer debug logging via init options (SDK v0.10+)
 			// Note: "debug"/"info" levels cause OOM or log binary data - use "warn" or higher
-			// Must be called AFTER init() in SDK v0.10+
-			initializeLogger("warn");
+			await init({ log: "warn" });
 			wasmerInitialized = true;
 		}
 
