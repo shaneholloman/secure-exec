@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Directory, Wasmer, Runtime } from "@wasmer/sdk/node";
 import { NodeProcess } from "sandboxed-node";
+import { createCommandExecutor } from "../command-executor.js";
 
 export interface VirtualMachineOptions {
 	args?: string[];
@@ -41,6 +42,21 @@ interface TerminalOptions {
 	rows: number;
 }
 
+/**
+ * Handle for a spawned child process with streaming I/O.
+ * Matches the SpawnedProcess interface from sandboxed-node.
+ */
+interface SpawnedProcess {
+	/** Write to process stdin */
+	writeStdin(data: Uint8Array | string): void;
+	/** Close stdin (signal EOF) */
+	closeStdin(): void;
+	/** Kill the process with optional signal (default SIGTERM=15) */
+	kill(signal?: number): void;
+	/** Wait for process to exit, returns exit code */
+	wait(): Promise<number>;
+}
+
 interface HostExecContext {
 	command: string;
 	args: string[];
@@ -58,6 +74,18 @@ interface HostExecContext {
 	setKillFunction?: (killFn: (signal: number) => void) => void;
 	// Terminal options (if set, apply TERM/COLUMNS/LINES to env)
 	terminal?: TerminalOptions;
+	// Child process spawning (for nested spawns from sandboxed code)
+	// Provided by wasmer-js scheduler - routes through host_exec infrastructure
+	spawnChildStreaming?(
+		command: string,
+		args: string[],
+		options: {
+			cwd?: string;
+			env?: Record<string, string>;
+			onStdout?: (data: Uint8Array) => void;
+			onStderr?: (data: Uint8Array) => void;
+		},
+	): SpawnedProcess;
 }
 
 const DATA_MOUNT_PATH = "/data";
@@ -200,6 +228,9 @@ async function handleNodeCommand(ctx: HostExecContext): Promise<number> {
 		? new TextDecoder().decode(Buffer.concat(stdinChunks.map(c => Buffer.from(c))))
 		: undefined;
 
+	// Create CommandExecutor for child process support (if available)
+	const commandExecutor = createCommandExecutor(ctx);
+
 	// Create NodeProcess with context from host_exec
 	const nodeProcess = new NodeProcess({
 		memoryLimit: 128,
@@ -212,6 +243,8 @@ async function handleNodeCommand(ctx: HostExecContext): Promise<number> {
 			platform: "linux",
 			arch: "x64",
 		},
+		// Pass CommandExecutor for child_process support (routes through wasmer-js)
+		commandExecutor: commandExecutor ?? undefined,
 		// TODO: Add filesystem when VFS is passed through HostExecContext
 	});
 

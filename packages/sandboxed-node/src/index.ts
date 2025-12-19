@@ -40,15 +40,39 @@ export interface OSConfig {
 	hostname?: string;
 }
 
-// Interface for command executor (like WasixInstance)
+/**
+ * Handle for a spawned child process with streaming I/O.
+ */
+export interface SpawnedProcess {
+	/** Write to process stdin */
+	writeStdin(data: Uint8Array | string): void;
+	/** Close stdin (signal EOF) */
+	closeStdin(): void;
+	/** Kill the process with optional signal (default SIGTERM=15) */
+	kill(signal?: number): void;
+	/** Wait for process to exit, returns exit code */
+	wait(): Promise<number>;
+}
+
+/**
+ * Interface for executing commands from sandboxed code.
+ * Implemented by nanosandbox to handle child process requests.
+ *
+ * Only spawn() is required - exec/run can be built on top by collecting
+ * stdout/stderr and waiting for exit.
+ */
 export interface CommandExecutor {
-	exec(
+	/** Spawn command with streaming I/O */
+	spawn(
 		command: string,
-	): Promise<{ stdout: string; stderr: string; code: number }>;
-	run(
-		command: string,
-		args?: string[],
-	): Promise<{ stdout: string; stderr: string; code: number }>;
+		args: string[],
+		options: {
+			cwd?: string;
+			env?: Record<string, string>;
+			onStdout?: (data: Uint8Array) => void;
+			onStderr?: (data: Uint8Array) => void;
+		},
+	): SpawnedProcess;
 }
 
 // Interface for network adapter (fetch, http, dns)
@@ -872,27 +896,128 @@ export class NodeProcess {
 		// Set up child_process References if we have a CommandExecutor
 		if (this.commandExecutor) {
 			const executor = this.commandExecutor;
+			let nextSessionId = 1;
+			const sessions = new Map<number, SpawnedProcess>();
 
-			// Reference for exec (shell command) - returns JSON string for transfer
-			const childProcessExecRef = new ivm.Reference(
-				async (command: string): Promise<string> => {
-					const result = await executor.exec(command);
-					return JSON.stringify(result);
-				},
-			);
+			// Get dispatcher reference from isolate (set by bridge code)
+			const dispatchRef = context.global.getSync("_childProcessDispatch", {
+				reference: true,
+			}) as ivm.Reference<
+				(
+					sessionId: number,
+					type: "stdout" | "stderr" | "exit",
+					data: Uint8Array | number,
+				) => void
+			>;
 
-			// Reference for spawn (command with args) - returns JSON string for transfer
-			// Args are passed as JSON string for transferability
-			const childProcessSpawnRef = new ivm.Reference(
-				async (command: string, argsJson: string): Promise<string> => {
+			// Start a spawn - returns session ID
+			const spawnStartRef = new ivm.Reference(
+				(command: string, argsJson: string, optionsJson: string): number => {
 					const args = JSON.parse(argsJson) as string[];
-					const result = await executor.run(command, args);
-					return JSON.stringify(result);
+					const options = JSON.parse(optionsJson) as {
+						cwd?: string;
+						env?: Record<string, string>;
+					};
+					const sessionId = nextSessionId++;
+
+					const proc = executor.spawn(command, args, {
+						cwd: options.cwd,
+						env: options.env,
+						onStdout: (data) => {
+							dispatchRef.applySync(
+								undefined,
+								[sessionId, "stdout", data],
+								{ arguments: { copy: true } },
+							);
+						},
+						onStderr: (data) => {
+							dispatchRef.applySync(
+								undefined,
+								[sessionId, "stderr", data],
+								{ arguments: { copy: true } },
+							);
+						},
+					});
+
+					proc.wait().then((code) => {
+						dispatchRef.applySync(undefined, [sessionId, "exit", code]);
+						sessions.delete(sessionId);
+					});
+
+					sessions.set(sessionId, proc);
+					return sessionId;
 				},
 			);
 
-			await jail.set("_childProcessExecRaw", childProcessExecRef);
-			await jail.set("_childProcessSpawnRaw", childProcessSpawnRef);
+			// Stdin write
+			const stdinWriteRef = new ivm.Reference(
+				(sessionId: number, data: Uint8Array): void => {
+					sessions.get(sessionId)?.writeStdin(data);
+				},
+			);
+
+			// Stdin close
+			const stdinCloseRef = new ivm.Reference((sessionId: number): void => {
+				sessions.get(sessionId)?.closeStdin();
+			});
+
+			// Kill
+			const killRef = new ivm.Reference(
+				(sessionId: number, signal: number): void => {
+					sessions.get(sessionId)?.kill(signal);
+				},
+			);
+
+			// Synchronous spawn - blocks until process exits, returns all output
+			// Used by execSync/spawnSync which need to wait for completion
+			const spawnSyncRef = new ivm.Reference(
+				async (
+					command: string,
+					argsJson: string,
+					optionsJson: string,
+				): Promise<string> => {
+					const args = JSON.parse(argsJson) as string[];
+					const options = JSON.parse(optionsJson) as {
+						cwd?: string;
+						env?: Record<string, string>;
+					};
+
+					// Collect stdout/stderr
+					const stdoutChunks: Uint8Array[] = [];
+					const stderrChunks: Uint8Array[] = [];
+
+					const proc = executor.spawn(command, args, {
+						cwd: options.cwd,
+						env: options.env,
+						onStdout: (data) => {
+							stdoutChunks.push(data);
+						},
+						onStderr: (data) => {
+							stderrChunks.push(data);
+						},
+					});
+
+					// Wait for process to exit
+					const exitCode = await proc.wait();
+
+					// Combine chunks into strings
+					const decoder = new TextDecoder();
+					const stdout = stdoutChunks
+						.map((c) => decoder.decode(c))
+						.join("");
+					const stderr = stderrChunks
+						.map((c) => decoder.decode(c))
+						.join("");
+
+					return JSON.stringify({ stdout, stderr, code: exitCode });
+				},
+			);
+
+			await jail.set("_childProcessSpawnStart", spawnStartRef);
+			await jail.set("_childProcessStdinWrite", stdinWriteRef);
+			await jail.set("_childProcessStdinClose", stdinCloseRef);
+			await jail.set("_childProcessKill", killRef);
+			await jail.set("_childProcessSpawnSync", spawnSyncRef);
 		}
 
 		// Set up network References if we have a NetworkAdapter

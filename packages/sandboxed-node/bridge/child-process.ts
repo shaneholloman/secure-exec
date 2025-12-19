@@ -3,23 +3,66 @@
 
 import type * as nodeChildProcess from "child_process";
 
-// Declare host bridge References
-declare const _childProcessExecRaw: {
-  apply(
-    ctx: undefined,
-    args: [string],
-    options: { result: { promise: true } }
-  ): Promise<string>;
-  applySyncPromise(ctx: undefined, args: [string]): string;
-};
+// Host bridge declarations for streaming mode
+declare const _childProcessSpawnStart:
+  | {
+      applySync(ctx: undefined, args: [string, string, string]): number;
+    }
+  | undefined;
 
-declare const _childProcessSpawnRaw: {
-  apply(
-    ctx: undefined,
-    args: [string, string],
-    options: { result: { promise: true } }
-  ): Promise<string>;
-  applySyncPromise(ctx: undefined, args: [string, string]): string;
+declare const _childProcessStdinWrite:
+  | {
+      applySync(ctx: undefined, args: [number, Uint8Array]): void;
+    }
+  | undefined;
+
+declare const _childProcessStdinClose:
+  | {
+      applySync(ctx: undefined, args: [number]): void;
+    }
+  | undefined;
+
+declare const _childProcessKill:
+  | {
+      applySync(ctx: undefined, args: [number, number]): void;
+    }
+  | undefined;
+
+// Synchronous spawn - blocks until process exits, returns all output as JSON
+declare const _childProcessSpawnSync:
+  | {
+      applySyncPromise(ctx: undefined, args: [string, string, string]): string;
+    }
+  | undefined;
+
+// Active children registry - maps session ID to ChildProcess
+const activeChildren = new Map<number, ChildProcess>();
+
+// Global dispatcher - host calls this when data arrives
+(globalThis as Record<string, unknown>)._childProcessDispatch = (
+  sessionId: number,
+  type: "stdout" | "stderr" | "exit",
+  data: Uint8Array | number
+): void => {
+  const child = activeChildren.get(sessionId);
+  if (!child) return;
+
+  if (type === "stdout") {
+    const buf =
+      typeof Buffer !== "undefined" ? Buffer.from(data as Uint8Array) : data;
+    child.stdout.emit("data", buf);
+  } else if (type === "stderr") {
+    const buf =
+      typeof Buffer !== "undefined" ? Buffer.from(data as Uint8Array) : data;
+    child.stderr.emit("data", buf);
+  } else if (type === "exit") {
+    child.exitCode = data as number;
+    child.stdout.emit("end");
+    child.stderr.emit("end");
+    child.emit("close", data, null);
+    child.emit("exit", data, null);
+    activeChildren.delete(sessionId);
+  }
 };
 
 // Event listener types
@@ -266,6 +309,7 @@ interface ExecError extends Error {
 }
 
 // exec - execute shell command, callback when done
+// Uses spawn("bash", ["-c", command]) internally
 function exec(
   command: string,
   options?: nodeChildProcess.ExecOptions | ((error: ExecError | null, stdout: string, stderr: string) => void),
@@ -276,62 +320,71 @@ function exec(
     options = {};
   }
 
-  const child = new ChildProcess();
+  // Use spawn with shell to execute the command
+  const child = spawn("bash", ["-c", command], { shell: false });
   child.spawnargs = ["bash", "-c", command];
   child.spawnfile = "bash";
 
-  // Execute asynchronously via host bridge
-  (async () => {
-    try {
-      const jsonResult = await _childProcessExecRaw.apply(undefined, [command], {
-        result: { promise: true },
-      });
-      const result = JSON.parse(jsonResult) as { stdout?: string; stderr?: string; code?: number };
-      const stdout = result.stdout || "";
-      const stderr = result.stderr || "";
-      const code = result.code || 0;
+  // Collect output and invoke callback
+  let stdout = "";
+  let stderr = "";
 
-      child._complete(stdout, stderr, code);
+  child.stdout.on("data", (data: unknown) => {
+    stdout += String(data);
+  });
 
-      if (callback) {
-        if (code !== 0) {
-          const err: ExecError = new Error("Command failed: " + command);
-          err.code = code;
-          err.killed = false;
-          err.signal = null;
-          err.cmd = command;
-          err.stdout = stdout;
-          err.stderr = stderr;
-          callback(err, stdout, stderr);
-        } else {
-          callback(null, stdout, stderr);
-        }
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      child._complete("", errMsg, 1);
-      if (callback) {
-        const error: ExecError = err instanceof Error ? err : new Error(String(err));
-        error.code = 1;
-        error.stdout = "";
-        error.stderr = errMsg;
-        callback(error, "", error.stderr);
+  child.stderr.on("data", (data: unknown) => {
+    stderr += String(data);
+  });
+
+  child.on("close", (code: number) => {
+    if (callback) {
+      if (code !== 0) {
+        const err: ExecError = new Error("Command failed: " + command);
+        err.code = code;
+        err.killed = false;
+        err.signal = null;
+        err.cmd = command;
+        err.stdout = stdout;
+        err.stderr = stderr;
+        callback(err, stdout, stderr);
+      } else {
+        callback(null, stdout, stderr);
       }
     }
-  })();
+  });
+
+  child.on("error", (err: unknown) => {
+    if (callback) {
+      const error: ExecError = err instanceof Error ? err : new Error(String(err));
+      error.code = 1;
+      error.stdout = stdout;
+      error.stderr = stderr;
+      callback(error, stdout, stderr);
+    }
+  });
 
   return child;
 }
 
 // execSync - synchronous shell execution
+// Uses spawnSync("bash", ["-c", command]) internally
 function execSync(
   command: string,
   options?: nodeChildProcess.ExecSyncOptions
 ): string | Buffer {
   const opts = options || {};
 
+  if (typeof _childProcessSpawnSync === "undefined") {
+    throw new Error("child_process.execSync requires CommandExecutor to be configured");
+  }
+
   // Use synchronous bridge call - result is JSON string
-  const jsonResult = _childProcessExecRaw.applySyncPromise(undefined, [command]);
+  const jsonResult = _childProcessSpawnSync.applySyncPromise(undefined, [
+    "bash",
+    JSON.stringify(["-c", command]),
+    JSON.stringify({ cwd: opts.cwd, env: opts.env as Record<string, string> }),
+  ]);
   const result = JSON.parse(jsonResult) as { stdout: string; stderr: string; code: number };
 
   if (result.code !== 0) {
@@ -369,36 +422,62 @@ function spawn(
   child.spawnfile = command;
   child.spawnargs = [command, ...argsArray];
 
-  // Check if it's a shell command
-  const useShell = opts.shell || false;
+  // Check if streaming mode is available
+  if (typeof _childProcessSpawnStart !== "undefined") {
+    // Streaming mode - spawn immediately
+    const sessionId = _childProcessSpawnStart.applySync(undefined, [
+      command,
+      JSON.stringify(argsArray),
+      JSON.stringify({ cwd: opts.cwd, env: opts.env }),
+    ]);
 
-  // Execute asynchronously
-  (async () => {
-    try {
-      let jsonResult: string;
-      if (useShell || command === "bash" || command === "sh") {
-        // Use shell execution
-        const fullCmd = [command, ...argsArray].join(" ");
-        jsonResult = await _childProcessExecRaw.apply(undefined, [fullCmd], {
-          result: { promise: true },
-        });
-      } else {
-        // Use spawn - args passed as JSON string for transferability
-        jsonResult = await _childProcessSpawnRaw.apply(
-          undefined,
-          [command, JSON.stringify(argsArray)],
-          { result: { promise: true } }
-        );
+    activeChildren.set(sessionId, child);
+
+    // Override stdin methods for streaming
+    child.stdin.write = (data: unknown): boolean => {
+      if (typeof _childProcessStdinWrite === "undefined") return false;
+      const bytes =
+        typeof data === "string" ? new TextEncoder().encode(data) : (data as Uint8Array);
+      _childProcessStdinWrite.applySync(undefined, [sessionId, bytes]);
+      return true;
+    };
+
+    child.stdin.end = (): void => {
+      if (typeof _childProcessStdinClose !== "undefined") {
+        _childProcessStdinClose.applySync(undefined, [sessionId]);
       }
-      const result = JSON.parse(jsonResult) as { stdout?: string; stderr?: string; code?: number };
+      child.stdin.writable = false;
+    };
 
-      child._complete(result.stdout || "", result.stderr || "", result.code || 0);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      child._complete("", errMsg, 1);
-      child.emit("error", err);
-    }
-  })();
+    // Override kill method
+    child.kill = (signal?: NodeJS.Signals | number): boolean => {
+      if (typeof _childProcessKill === "undefined") return false;
+      const sig =
+        signal === "SIGKILL" || signal === 9
+          ? 9
+          : signal === "SIGINT" || signal === 2
+            ? 2
+            : 15;
+      _childProcessKill.applySync(undefined, [sessionId, sig]);
+      child.killed = true;
+      child.signalCode = (
+        typeof signal === "string" ? signal : "SIGTERM"
+      ) as NodeJS.Signals;
+      return true;
+    };
+
+    return child;
+  }
+
+  // Fallback: no CommandExecutor available
+  const err = new Error(
+    "child_process.spawn requires CommandExecutor to be configured"
+  );
+  // Emit error asynchronously to match Node.js behavior
+  setTimeout(() => {
+    child.emit("error", err);
+    child._complete("", err.message, 1);
+  }, 0);
 
   return child;
 }
@@ -421,18 +500,33 @@ function spawnSync(
   options?: nodeChildProcess.SpawnSyncOptions
 ): SpawnSyncResult {
   let argsArray: string[] = [];
+  let opts: nodeChildProcess.SpawnSyncOptions = {};
 
   if (!Array.isArray(args)) {
-    // args is actually options
+    opts = (args as nodeChildProcess.SpawnSyncOptions) || {};
   } else {
     argsArray = args as string[];
+    opts = options || {};
+  }
+
+  if (typeof _childProcessSpawnSync === "undefined") {
+    return {
+      pid: 0,
+      output: [null, "", "child_process.spawnSync requires CommandExecutor to be configured"],
+      stdout: "",
+      stderr: "child_process.spawnSync requires CommandExecutor to be configured",
+      status: 1,
+      signal: null,
+      error: new Error("child_process.spawnSync requires CommandExecutor to be configured"),
+    };
   }
 
   try {
     // Args passed as JSON string for transferability
-    const jsonResult = _childProcessSpawnRaw.applySyncPromise(undefined, [
+    const jsonResult = _childProcessSpawnSync.applySyncPromise(undefined, [
       command,
       JSON.stringify(argsArray),
+      JSON.stringify({ cwd: opts.cwd, env: opts.env as Record<string, string> }),
     ]);
     const result = JSON.parse(jsonResult) as { stdout: string; stderr: string; code: number };
 

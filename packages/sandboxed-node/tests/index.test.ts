@@ -1089,30 +1089,56 @@ describe("NodeProcess", () => {
 	});
 
 	describe("Phase 3: child_process via CommandExecutor", () => {
-		// Mock command executor for testing
+		// Mock command executor for testing - uses new spawn() interface
 		const mockExecutor = {
-			async exec(command: string) {
-				if (command.includes("echo")) {
-					const match = command.match(/echo\s+["']?([^"']+)["']?/);
-					const text = match ? match[1] : "";
-					return { stdout: `${text}\n`, stderr: "", code: 0 };
-				}
-				if (command.includes("fail")) {
-					return { stdout: "", stderr: "command failed", code: 1 };
-				}
-				return { stdout: `executed: ${command}`, stderr: "", code: 0 };
-			},
-			async run(command: string, args: string[] = []) {
-				if (command === "echo") {
-					return { stdout: `${args.join(" ")}\n`, stderr: "", code: 0 };
-				}
-				if (command === "cat") {
-					return { stdout: "file content", stderr: "", code: 0 };
-				}
+			spawn(
+				command: string,
+				args: string[],
+				options: {
+					cwd?: string;
+					env?: Record<string, string>;
+					onStdout?: (data: Uint8Array) => void;
+					onStderr?: (data: Uint8Array) => void;
+				},
+			) {
+				const encoder = new TextEncoder();
+				let exitCode = 0;
+				let exitResolve: (code: number) => void;
+				const exitPromise = new Promise<number>((resolve) => {
+					exitResolve = resolve;
+				});
+
+				// Simulate async execution
+				setTimeout(() => {
+					// Handle bash -c "command" pattern (used by exec/execSync)
+					if (command === "bash" && args[0] === "-c") {
+						const shellCmd = args[1];
+						if (shellCmd.includes("echo")) {
+							const match = shellCmd.match(/echo\s+["']?([^"'\n]+)["']?/);
+							const text = match ? match[1] : "";
+							options.onStdout?.(encoder.encode(`${text}\n`));
+						} else if (shellCmd.includes("fail")) {
+							options.onStderr?.(encoder.encode("command failed\n"));
+							exitCode = 1;
+						} else {
+							options.onStdout?.(encoder.encode(`executed: ${shellCmd}\n`));
+						}
+					} else if (command === "echo") {
+						options.onStdout?.(encoder.encode(`${args.join(" ")}\n`));
+					} else if (command === "cat") {
+						options.onStdout?.(encoder.encode("file content"));
+					} else {
+						options.onStderr?.(encoder.encode(`command not found: ${command}\n`));
+						exitCode = 127;
+					}
+					exitResolve(exitCode);
+				}, 10);
+
 				return {
-					stdout: "",
-					stderr: `command not found: ${command}`,
-					code: 127,
+					writeStdin: (_data: Uint8Array | string) => {},
+					closeStdin: () => {},
+					kill: (_signal?: number) => {},
+					wait: () => exitPromise,
 				};
 			},
 		};
@@ -1236,22 +1262,52 @@ describe("NodeProcess", () => {
 
 		describe("spawnSync", () => {
 			it("should spawn commands synchronously", async () => {
-				// Create a complete mock executor for this test
+				// Create a complete mock executor for this test - uses new spawn() interface
 				const spawnMockExecutor = {
-					async exec(command: string) {
-						return { stdout: `exec: ${command}`, stderr: "", code: 0 };
-					},
-					async run(command: string, args: string[] = []) {
-						if (command === "echo") {
-							return { stdout: `${args.join(" ")}\n`, stderr: "", code: 0 };
-						}
-						if (command === "cat") {
-							return { stdout: "file content", stderr: "", code: 0 };
-						}
+					spawn(
+						command: string,
+						args: string[],
+						options: {
+							cwd?: string;
+							env?: Record<string, string>;
+							onStdout?: (data: Uint8Array) => void;
+							onStderr?: (data: Uint8Array) => void;
+						},
+					) {
+						const encoder = new TextEncoder();
+						let exitCode = 0;
+						let exitResolve: (code: number) => void;
+						const exitPromise = new Promise<number>((resolve) => {
+							exitResolve = resolve;
+						});
+
+						// Simulate async execution
+						setTimeout(() => {
+							if (command === "echo") {
+								options.onStdout?.(encoder.encode(`${args.join(" ")}\n`));
+							} else if (command === "cat") {
+								options.onStdout?.(encoder.encode("file content"));
+							} else if (command === "bash" && args[0] === "-c") {
+								const shellCmd = args[1];
+								if (shellCmd.includes("echo")) {
+									const match = shellCmd.match(/echo\s+["']?([^"'\n]+)["']?/);
+									const text = match ? match[1] : "";
+									options.onStdout?.(encoder.encode(`${text}\n`));
+								} else {
+									options.onStdout?.(encoder.encode(`exec: ${shellCmd}\n`));
+								}
+							} else {
+								options.onStderr?.(encoder.encode(`command not found: ${command}\n`));
+								exitCode = 127;
+							}
+							exitResolve(exitCode);
+						}, 10);
+
 						return {
-							stdout: "",
-							stderr: `command not found: ${command}`,
-							code: 127,
+							writeStdin: (_data: Uint8Array | string) => {},
+							closeStdin: () => {},
+							kill: (_signal?: number) => {},
+							wait: () => exitPromise,
 						};
 					},
 				};
@@ -2621,25 +2677,53 @@ describe("NodeProcess", () => {
 		});
 
 		it("should handle npm-style child_process for scripts", async () => {
-			// Mock command executor that simulates npm script execution
+			// Mock command executor that simulates npm script execution - uses new spawn() interface
 			const mockExecutor: CommandExecutor = {
-				exec: async (command: string) => {
-					if (command.includes("echo")) {
-						const match = command.match(/echo ['"]?(.+?)['"]?$/);
-						const msg = match ? match[1] : "";
-						return { stdout: `${msg}\n`, stderr: "", code: 0 };
-					}
-					return { stdout: "", stderr: "command not found", code: 127 };
-				},
-				run: async (cmd: string, args?: string[]) => {
-					if (cmd === "echo") {
-						return {
-							stdout: `${(args || []).join(" ")}\n`,
-							stderr: "",
-							code: 0,
-						};
-					}
-					return { stdout: "", stderr: "command not found", code: 127 };
+				spawn(
+					command: string,
+					args: string[],
+					options: {
+						cwd?: string;
+						env?: Record<string, string>;
+						onStdout?: (data: Uint8Array) => void;
+						onStderr?: (data: Uint8Array) => void;
+					},
+				) {
+					const encoder = new TextEncoder();
+					let exitCode = 0;
+					let exitResolve: (code: number) => void;
+					const exitPromise = new Promise<number>((resolve) => {
+						exitResolve = resolve;
+					});
+
+					// Simulate async execution
+					setTimeout(() => {
+						// Handle bash -c "command" pattern (used by exec/execSync)
+						if (command === "bash" && args[0] === "-c") {
+							const shellCmd = args[1];
+							if (shellCmd.includes("echo")) {
+								const match = shellCmd.match(/echo ['"]?(.+?)['"]?$/);
+								const msg = match ? match[1] : "";
+								options.onStdout?.(encoder.encode(`${msg}\n`));
+							} else {
+								options.onStderr?.(encoder.encode("command not found\n"));
+								exitCode = 127;
+							}
+						} else if (command === "echo") {
+							options.onStdout?.(encoder.encode(`${args.join(" ")}\n`));
+						} else {
+							options.onStderr?.(encoder.encode("command not found\n"));
+							exitCode = 127;
+						}
+						exitResolve(exitCode);
+					}, 10);
+
+					return {
+						writeStdin: (_data: Uint8Array | string) => {},
+						closeStdin: () => {},
+						kill: (_signal?: number) => {},
+						wait: () => exitPromise,
+					};
 				},
 			};
 
