@@ -1,26 +1,22 @@
 /**
  * VirtualFileSystem implementation for nanosandbox.
  *
- * CRITICAL: This module MUST use vfs directly with NO path transformation.
- * - NO /data path handling in this file
- * - NO Directory objects in this file
- * - Just pass paths through as-is to the VFS
+ * This module wraps the wasmer-js VFS API to provide the VirtualFileSystem
+ * interface needed by sandboxed-node.
  *
- * The path handling logic is in wasix-vfs.ts, not here.
- *
- * @see wasmer_vfs_api.md for the specification
+ * Paths are passed through as-is - no transformation.
  */
 import type { VirtualFileSystem } from "sandboxed-node";
-import type { AsyncVFS } from "./wasix-vfs.js";
+import type { VFS } from "@wasmer/sdk/node";
 
 /**
- * Create a VirtualFileSystem that delegates directly to an AsyncVFS.
+ * Create a VirtualFileSystem that delegates directly to a wasmer-js VFS.
  * Paths are passed through as-is - no transformation.
  *
- * @param vfs - The AsyncVFS to delegate to
+ * @param vfs - The wasmer-js VFS to delegate to
  * @returns A VirtualFileSystem implementation
  */
-export function createVirtualFileSystem(vfs: AsyncVFS): VirtualFileSystem {
+export function createVirtualFileSystem(vfs: VFS): VirtualFileSystem {
 	return {
 		readFile: async (path: string): Promise<Uint8Array> => {
 			return vfs.readFile(path);
@@ -31,7 +27,8 @@ export function createVirtualFileSystem(vfs: AsyncVFS): VirtualFileSystem {
 		},
 
 		readDir: async (path: string): Promise<string[]> => {
-			return vfs.readDir(path);
+			const entries = vfs.readDir(path);
+			return entries.map((entry) => entry.name);
 		},
 
 		writeFile: async (path: string, content: string | Uint8Array): Promise<void> => {
@@ -39,15 +36,15 @@ export function createVirtualFileSystem(vfs: AsyncVFS): VirtualFileSystem {
 		},
 
 		createDir: async (path: string): Promise<void> => {
-			await vfs.mkdir(path);
+			vfs.mkdir(path);
 		},
 
 		removeFile: async (path: string): Promise<void> => {
-			await vfs.removeFile(path);
+			vfs.removeFile(path);
 		},
 
 		removeDir: async (path: string): Promise<void> => {
-			await vfs.removeDir(path);
+			vfs.removeDir(path);
 		},
 
 		exists: async (path: string): Promise<boolean> => {
@@ -55,7 +52,7 @@ export function createVirtualFileSystem(vfs: AsyncVFS): VirtualFileSystem {
 		},
 
 		mkdir: async (path: string): Promise<void> => {
-			await vfs.mkdir(path);
+			vfs.mkdir(path);
 		},
 	};
 }
