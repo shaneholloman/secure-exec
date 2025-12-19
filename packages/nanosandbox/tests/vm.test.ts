@@ -80,34 +80,68 @@ describe("VirtualMachine", () => {
 			expect(vm.stdout.trim()).toBe("got: hello world");
 		});
 
-		it("should stream stdin to process with spawn()", async () => {
+		it("should stream stdin to bash with spawn()", async () => {
 			// spawn() provides a Process handle for streaming stdin
-			// Note: In wasmer-js TTY mode, stdin is echoed to stdout.
-			// The actual program output is mixed with echo.
+			// LIMITATION: In wasmer-js TTY mode, stdin is echoed to stdout but
+			// the command's actual output is NOT captured - only TTY echo works.
 			const proc = await runtime.spawn("bash", {
 				args: ["-c", "while read line; do echo \"OUT:$line\"; done"],
 			});
 
-			// Send input with delays to let bash process each line
+			// Helper to poll stdout until we see expected output (TTY echo)
+			const pollForOutput = async (expected: string, timeoutMs = 5000): Promise<string> => {
+				const startTime = Date.now();
+				let accumulated = "";
+				while (Date.now() - startTime < timeoutMs) {
+					const chunk = await proc.readStdout();
+					accumulated += chunk;
+					if (accumulated.includes(expected)) {
+						return accumulated;
+					}
+					await new Promise(r => setTimeout(r, 50));
+				}
+				throw new Error(`Timeout waiting for "${expected}" in stdout. Got: "${accumulated}"`);
+			};
+
+			// Streaming test: write stdin, poll for TTY echo, repeat
+			// Note: We only see TTY echo, not command output (wasmer-js limitation)
 			await proc.writeStdin("ping1\n");
-			await new Promise(r => setTimeout(r, 100));
+			await pollForOutput("ping1");
 
 			await proc.writeStdin("ping2\n");
-			await new Promise(r => setTimeout(r, 100));
+			await pollForOutput("ping2");
 
 			await proc.writeStdin("ping3\n");
-			await new Promise(r => setTimeout(r, 100));
+			await pollForOutput("ping3");
 
 			await proc.closeStdin();
+			await proc.wait();
+		}, 30000);
 
-			// Wait for process to complete
+		it.skip("should stream stdin to node with spawn()", async () => {
+			// TODO: spawn() stdin doesn't work for node commands yet.
+			// The WASM node shim receives stdin but doesn't forward it to host_exec.
+			// Use run() with stdin option for node commands instead.
+			const script = `
+				let data = '';
+				process.stdin.on('data', chunk => data += chunk);
+				process.stdin.on('end', () => {
+					data.trim().split('\\n').forEach(line => console.log('OUT:' + line));
+				});
+			`;
+			const proc = await runtime.spawn("node", {
+				args: ["-e", script],
+			});
+
+			await proc.writeStdin("ping1\n");
+			await proc.writeStdin("ping2\n");
+			await proc.writeStdin("ping3\n");
+			await proc.closeStdin();
+
 			const result = await proc.wait();
-
-			// stdout contains TTY echo + program output
-			// Due to TTY buffering, we may only see the echo
-			expect(result.stdout).toContain("ping1");
-			expect(result.stdout).toContain("ping2");
-			expect(result.stdout).toContain("ping3");
+			expect(result.stdout).toContain("OUT:ping1");
+			expect(result.stdout).toContain("OUT:ping2");
+			expect(result.stdout).toContain("OUT:ping3");
 		}, 30000);
 	});
 
