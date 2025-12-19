@@ -67,7 +67,7 @@ describe("VirtualMachine", () => {
 			expect(vm.code).not.toBe(0);
 		});
 
-		it("should read stdin and output it", async () => {
+		it("should read stdin and output it (node)", async () => {
 			const script = `
 				let data = '';
 				process.stdin.on('data', chunk => data += chunk);
@@ -80,15 +80,21 @@ describe("VirtualMachine", () => {
 			expect(vm.stdout.trim()).toBe("got: hello world");
 		});
 
-		it("should stream stdin to bash with spawn()", async () => {
-			// spawn() provides a Process handle for streaming stdin via TTY mode.
-			// BUG: wasmer-js TTY echoes stdin to stdout but does NOT deliver input
-			// to the program. So we can only test that TTY echo streams correctly.
+		it("should read stdin and output it (bash)", async () => {
+			const vm = await runtime.run("bash", {
+				args: ["-c", "read line; echo got: $line"],
+				stdin: "hello world\n",
+			});
+			expect(vm.stdout.trim()).toBe("got: hello world");
+		});
+
+		// Streaming stdin tests are skipped due to wasmer-js TTY bug.
+		// See: docs/research/wasmer-js-tty-stdin-bug.md
+		it.skip("should stream stdin to bash with spawn()", async () => {
 			const proc = await runtime.spawn("bash", {
 				args: ["-c", "while read line; do echo \"OUT:$line\"; done"],
 			});
 
-			// Streaming test: write stdin, poll for TTY echo, repeat
 			await proc.writeStdin("ping1\n");
 			await pollForOutput(proc, "ping1\n");
 
@@ -103,9 +109,6 @@ describe("VirtualMachine", () => {
 		}, 30000);
 
 		it.skip("should stream stdin to node with spawn()", async () => {
-			// TODO: spawn() stdin doesn't work for node commands yet.
-			// The WASM node shim receives stdin but doesn't forward it to host_exec.
-			// Use run() with stdin option for node commands instead.
 			const script = `
 				let data = '';
 				process.stdin.on('data', chunk => data += chunk);
