@@ -66,6 +66,11 @@ export function getBridgeWithConfig(
 		env?: Record<string, string>;
 		argv?: string[];
 		execPath?: string;
+		pid?: number;
+		ppid?: number;
+		uid?: number;
+		gid?: number;
+		stdin?: string;
 	},
 	osConfig?: {
 		platform?: string;

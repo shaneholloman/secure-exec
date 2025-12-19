@@ -4,7 +4,9 @@ This document explains how WASM processes running in WASIX can spawn and communi
 
 ## Overview
 
-The sandbox runs WASM binaries (bash, coreutils, etc.) in Web Workers using the wasmer-js runtime. Sometimes these WASM processes need to execute commands that can't run in WASM (e.g., `node`, `npm`). The `host_exec` syscalls enable bidirectional streaming communication between WASM and host processes.
+The sandbox runs WASM binaries (bash, coreutils, etc.) in Web Workers using the wasmer-js runtime. Sometimes these WASM processes need to execute commands that can't run in WASM (e.g., `node`, `npm`). The `host_exec` syscalls enable bidirectional streaming communication between WASM and host.
+
+For `node` commands specifically, we use sandboxed-node's `NodeProcess` (V8 isolate via isolated-vm) instead of spawning a real process. This provides better security, faster execution, and controlled sandbox environment.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -22,23 +24,22 @@ The sandbox runs WASM binaries (bash, coreutils, etc.) in Web Workers using the 
                     SharedArrayBuffer + Atomics (sync)
                                         │
 ┌───────────────────────────────────────│─────────────────────────────┐
-│ Main Thread (Scheduler)               ▼                             │
+│ Main Thread (nanosandbox)             ▼                             │
 │                                                                     │
 │   ┌─────────────────────────────────────────────────────────┐      │
-│   │ Scheduler                                                │      │
-│   │ - Receives messages from workers                         │      │
-│   │ - Spawns host processes                                  │      │
-│   │ - Queues stdout/stderr for workers                       │      │
-│   │ - Signals workers via Atomics.notify()                   │      │
+│   │ hostExecHandler                                          │      │
+│   │ - Receives HostExecContext from scheduler                │      │
+│   │ - Routes "node" to sandboxed-node (V8 isolate)          │      │
+│   │ - Streams stdout/stderr back via callbacks               │      │
 │   └─────────────────────────────────────────────────────────┘      │
 │                              │                                      │
-│                              │ child_process.spawn()                │
+│                              │ new NodeProcess()                    │
 │                              ▼                                      │
 │   ┌─────────────────────────────────────────────────────────┐      │
-│   │ Host Node.js Process                                     │      │
-│   │ - Real Node.js execution                                 │      │
-│   │ - Streams stdout/stderr back to scheduler                │      │
-│   │ - Receives stdin from scheduler                          │      │
+│   │ sandboxed-node (V8 Isolate)                              │      │
+│   │ - Isolated V8 context via isolated-vm                    │      │
+│   │ - Configurable process.pid, env, cwd, argv               │      │
+│   │ - Node.js API polyfills (fs, path, etc.)                 │      │
 │   └─────────────────────────────────────────────────────────┘      │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
@@ -119,11 +120,19 @@ Offset 0: Notification flag (0 = no data, 1 = data ready)
 | `src/tasks/thread_pool_worker.rs` | Worker-side Atomics setup |
 | `src/tasks/scheduler_message.rs` | IPC message types |
 
-### nanosandbox (WASM shim)
+### nanosandbox (host handler + WASM shim)
 
 | File | Purpose |
 |------|---------|
+| `packages/nanosandbox/src/vm/index.ts` | hostExecHandler routes to NodeProcess |
 | `wasix-runtime/src/main.rs` | WASM binary that uses syscalls |
+
+### sandboxed-node (V8 isolate)
+
+| File | Purpose |
+|------|---------|
+| `packages/sandboxed-node/src/index.ts` | NodeProcess class |
+| `packages/sandboxed-node/bridge/process.ts` | process polyfill with pid/env/argv |
 
 ## WASM Shim Event Loop
 
@@ -199,11 +208,23 @@ When a process is killed by a signal, the exit code follows the Unix convention:
 1. WASM bash runs `node -e "console.log('hello')"`
 2. Bash is configured to use wasix-runtime shim for `node`
 3. Shim calls `host_exec_start` with the command
-4. Scheduler spawns real Node.js process
-5. Node's stdout streams back through scheduler
-6. Shim receives via `host_exec_try_read`
-7. Shim writes to its own stdout (visible in WASM)
-8. Node exits, shim receives exit code, exits with same code
+4. Scheduler calls hostExecHandler with HostExecContext
+5. hostExecHandler creates NodeProcess (V8 isolate)
+6. NodeProcess.exec() runs the code
+7. stdout/stderr streamed back via onStdout/onStderr callbacks
+8. Exit code returned to WASM
+
+## HostExecContext to ProcessConfig
+
+When hostExecHandler creates a NodeProcess, it maps context to config:
+
+| HostExecContext | ProcessConfig | Notes |
+|-----------------|---------------|-------|
+| `ctx.cwd` | `processConfig.cwd` | Working directory |
+| `ctx.env` | `processConfig.env` | Environment variables |
+| `ctx.args` | `processConfig.argv` | Command line arguments |
+| (generated) | `processConfig.pid` | Unique PID from counter |
+| (hardcoded) | `processConfig.ppid` | Always 1 (WASM shell parent) |
 
 ## Security Considerations
 

@@ -12,13 +12,6 @@ extern "C" {
         session_ptr: *mut u64,
     ) -> i32;
 
-    fn host_exec_read(
-        session: u64,
-        type_ptr: *mut u32,
-        data_ptr: *mut u8,
-        data_len_ptr: *mut usize,
-    ) -> i32;
-
     fn host_exec_write(
         session: u64,
         data_ptr: *const u8,
@@ -178,7 +171,7 @@ fn run_event_loop(session: u64) {
     // Subscriptions for poll_oneoff:
     // [0] = stdin (fd 0) for reading
     // [1] = timeout (10ms) for checking host output
-    let mut subscriptions = [
+    let subscriptions = [
         // stdin read subscription
         Subscription {
             userdata: 0,

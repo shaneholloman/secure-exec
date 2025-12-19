@@ -8745,35 +8745,121 @@ var bridge = (() => {
     columns: 80,
     rows: 24
   };
+  var _stdinListeners = {};
+  var _stdinOnceListeners = {};
+  globalThis._stdinData = typeof _processConfig !== "undefined" && _processConfig.stdin || "";
+  globalThis._stdinPosition = 0;
+  globalThis._stdinEnded = false;
+  globalThis._stdinFlowMode = false;
+  function getStdinData() {
+    return globalThis._stdinData;
+  }
+  function getStdinPosition() {
+    return globalThis._stdinPosition;
+  }
+  function setStdinPosition(v) {
+    globalThis._stdinPosition = v;
+  }
+  function getStdinEnded() {
+    return globalThis._stdinEnded;
+  }
+  function setStdinEnded(v) {
+    globalThis._stdinEnded = v;
+  }
+  function getStdinFlowMode() {
+    return globalThis._stdinFlowMode;
+  }
+  function setStdinFlowMode(v) {
+    globalThis._stdinFlowMode = v;
+  }
+  function _emitStdinData() {
+    if (getStdinEnded() || !getStdinData()) return;
+    if (getStdinFlowMode() && getStdinPosition() < getStdinData().length) {
+      const chunk = getStdinData().slice(getStdinPosition());
+      setStdinPosition(getStdinData().length);
+      const dataListeners = [..._stdinListeners["data"] || [], ..._stdinOnceListeners["data"] || []];
+      _stdinOnceListeners["data"] = [];
+      for (const listener of dataListeners) {
+        listener(chunk);
+      }
+      setStdinEnded(true);
+      const endListeners = [..._stdinListeners["end"] || [], ..._stdinOnceListeners["end"] || []];
+      _stdinOnceListeners["end"] = [];
+      for (const listener of endListeners) {
+        listener();
+      }
+      const closeListeners = [..._stdinListeners["close"] || [], ..._stdinOnceListeners["close"] || []];
+      _stdinOnceListeners["close"] = [];
+      for (const listener of closeListeners) {
+        listener();
+      }
+    }
+  }
   var _stdin = {
     readable: true,
     paused: true,
     encoding: null,
-    read() {
-      return null;
+    read(size) {
+      if (getStdinPosition() >= getStdinData().length) return null;
+      const chunk = size ? getStdinData().slice(getStdinPosition(), getStdinPosition() + size) : getStdinData().slice(getStdinPosition());
+      setStdinPosition(getStdinPosition() + chunk.length);
+      return chunk;
     },
-    on() {
+    on(event, listener) {
+      if (!_stdinListeners[event]) _stdinListeners[event] = [];
+      _stdinListeners[event].push(listener);
+      if (event === "end" && getStdinData() && !getStdinEnded()) {
+        setStdinFlowMode(true);
+        _emitStdinData();
+      }
       return this;
     },
-    once() {
+    once(event, listener) {
+      if (!_stdinOnceListeners[event]) _stdinOnceListeners[event] = [];
+      _stdinOnceListeners[event].push(listener);
       return this;
     },
-    emit() {
-      return false;
+    off(event, listener) {
+      if (_stdinListeners[event]) {
+        const idx = _stdinListeners[event].indexOf(listener);
+        if (idx !== -1) _stdinListeners[event].splice(idx, 1);
+      }
+      return this;
+    },
+    removeListener(event, listener) {
+      return this.off(event, listener);
+    },
+    emit(event, ...args) {
+      const listeners = [..._stdinListeners[event] || [], ..._stdinOnceListeners[event] || []];
+      _stdinOnceListeners[event] = [];
+      for (const listener of listeners) {
+        listener(args[0]);
+      }
+      return listeners.length > 0;
     },
     pause() {
       this.paused = true;
+      setStdinFlowMode(false);
       return this;
     },
     resume() {
       this.paused = false;
+      setStdinFlowMode(true);
+      _emitStdinData();
       return this;
     },
     setEncoding(enc) {
       this.encoding = enc;
       return this;
     },
-    isTTY: false
+    isTTY: false,
+    // For readline compatibility
+    [Symbol.asyncIterator]: async function* () {
+      const lines = getStdinData().split("\n");
+      for (const line of lines) {
+        if (line) yield line;
+      }
+    }
   };
   function hrtime(prev) {
     const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();

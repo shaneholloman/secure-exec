@@ -1,85 +1,106 @@
-# NanoSandbox
+# libsandbox
 
-**X% more efficient Linux sandboxes & runs anywhere Node.js runs** (compared to microVMs)
+**Run running fast, secure Linux-compatible sandboxes anywhere Node.js runs — no external providers or nested virtualization.**
 
-Sandboxes requires full Linux environments without compromise. Most Linux sandboxes are powered by microVMs today. However, these sandboxes are expensive to run due to idle resources and wasted virtual machine overhead.
+By compiling Linux tools to WebAssembly (WASIX) and combining with a V8 Isolate accelerator for speeding up Node.js performance, libsandbox provides a sandboxed, Linux-compatible environment anywhere Node.js runs in two lines of code:
 
-NanoSandbox provides a resource efficient alternative by providing a hybrid virtual machine combining WASIX to provide a low overhead Linux OS with V8 isolates for high-performance Node.js sandboxing.
+```
+import { VM } from "libsandbox";
+const vm = await VM.start();
+```
 
-The end result is a vaslty more efficient Linux sandbox with nearly identical performance that can run anywhere.
-
-TODO: Before diagram
-
-TODO: After diagram
-
-TODO: What sandboxes care about:
-- speed
-- it just works
-- cost
+Useful for one-off code evals, coding agents, and dev servers.
 
 ## Features
 
-- Suitable for short-lived code execution or long-lived sandboxes
-- No microVMs, just V8 isolates & WASM
-- Runs anywhere Node.js can run (Vercel Fluid Compute, Railway, Fly.io, Lambda, Cloud Run, etc)
-- Available as a library or MCP server
-- High-performance JS, no watered down JS runtime
-- Interactive terminal with TTY
-- Automatic fallback to microVMs without API changes (see Limitations below)
+- **Portable**: Runs anywhere Node.js runs (including Vercel Fluid Compute, Railway), does not require nested virtualization or Docker-in-Docker 
+- **Incredibly Fast**: WebAssembly and V8 isolates provide near-native performance with less memory than microVMs
+- **Secure**: Powered by WebAssembly & V8 isolates, using the same technology as Chromium and Cloudflare Workers
+- **Compatible With Coding Agents**: Provides tools coding agents are trained to use heavily (e.g. `rg`, `sed`, `awk`, `git`), not best-effort re-implementations. Coding agents don't need to do anything special, it just works.
+
+## Examples
+
+```
+// Shell
+await vm.exec("bash", { interactive: true });
+
+// Install NPM packages
+await vm.exec("npm install -g @anthropic-ai/claude-code")
+
+// Claude Code
+await vm.exec("npm install -g @anthropic-ai/claude-code && claude -p 'build me a billion dollar saas, make no mistakes'", {
+    env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY },
+    interactive: true,
+});
+
+// Open Code
+await vm.exec("TODO", {
+    env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY },
+    interactive: true,
+});
+
+// Git repos
+await vm.exec("git clone https://github.com/...");
+
+// Run dev servers
+await vm.exec("next dev");
+
+// Make network requests
+await vm.exec("curl google.com");
+
+// Python
+await vm.exec("python3");
+
+// Dynamically instally new packages
+await vm.exec("wapm install rivet-dev/todo");
+
+// TTY
+// TODO
+```
 
 ## Demo
 
-Try an interactive terminal.
+[Try it in your browser ->](TODO)
+
+Try it in your terminal:
+
+```
+npx -p @libsandbox/terminal
+```
 
 ## Getting Started
 
-### MCP Server
-
-_Recommended for most use cases. This lets you separate your agent code from resource-intensive sandboxed code._
-
-Managed MCP server:
+### `libsandbox`
 
 TODO
 
-Self-hosted MCP server:
+### `@libsandbox/sandboxed-node`
 
 TODO
 
-### As A Library
-
-_Available for portability._
+### Deploy & Scale with Rivet
 
 TODO
 
-Supports any platform that supports Node.js, such as:
+## Usage
 
-- Vercel Fluid Compute
-- Railway
-- AWS Lambda
-- Google Cloud Run
-
-### Interactive Shell
+### Interactive Shells
 
 TODO
 
-```
-npx @nanosandbox/shell
-```
-
-## Components
-
-- `nanosandbox`
-- `@nanosandbox/sandboxed-node`
-- `nanosandbox-actor` (WIP)
-- `nanosandbox-mcp` (WIP)
-- `wasix-runtime`
-- Tools compiled to WASIX: TODO
-
-## Architecture
+### Installing Components At Runtime
 
 TODO
 
-## Comparison to Existing Sandbox Technologies
+### Adding Components
+
+TODO
+
+### Building Components
+
+TODO
+
+## Comparison
 
 TODO: Architecture diagrams for each, and sort by light -> heavy
 
@@ -94,55 +115,89 @@ TODO: Architecture diagrams for each, and sort by light -> heavy
 | Compatibility | Good | Good enough (has fallback) | Good | Great |
 | Supports browser-based sandboxes | No | Coming soon | No | No |
 
-## Benchmarks
+## Technical Details
 
-### Idle
+### Architecture
+
+TODO
+
+### Benchmarks
+
+**Idle**
+
+TODO
 
 Measuring: idle memory, idle CPU
 
 - Next.js dev server
 - Vite dev server
 
-### CPU-bound
+**CPU-bound**
+
+TODO
 
 Measuring: idle memory, idle CPU
 
 - Next.js build
 - Vite build
 
-## Security
-
-### TL;DR
-
-This is based on the same technology (V8 isolates & WASM) that provides secure code execution to Chromium browsers and to Cloudflare Workers. By default, V8 isolates and WASM modules cannot execute any dangerous functionality outside of their respective sandboxes. This maeks auditing them simple: you can see the bridges that NanoSandbox provides here (TODO).
-
-### Thread Model
+### WebAssembly & WASIX
 
 TODO
 
-### Comparison to Cloudflare Workers
+### V8 Accelerator for Node.js
 
-Cloudflare Workers is the gold standard of using V8 isolates for isolated code execution at scale, so it helps to compare to them as a baseline.
+The core of libsandbox is powered by WebAssembly (WASIX) in order to provide real Linux tools to a lightweight sandbox at near-native performance.
+
+However, the biggest problem with using WebAssembly is that it cannot run Node.js. All JS runtimes compiled to WebAssembly are [unacceptably slow](TODO) compared to the V8's highly optimized JIT runtime.
+
+The solution is to implement new system calls in WASIX that allow programs in the VM to spawn V8 isolates — this consists of the majority of the work in building & maintaining libsandbox. We then provide a `node` bridge program that will forward all stdin & signal to the V8 isolate and return all stdout/stderr/exit code back in to the VM. Processes in the virtual machine treat node as if it is another program without any issues.
+
+Similarly, Node's `fs`, `child_process`, `net`, etc all work as if they are part of the same virtual machine. This enables complex programs like NPM that have many child process-, filesystem-, and network-related operations to work without modification.
+
+A similar project named WebContainers attempted this by implementing a Linux-compatible machine in JavaScript. However, this layer was heavily faked and prone to inconsistencies in the behavior. Due to the heavy reliance on standard Linux tools with Claude Code and other coding agents, there's a wide range of toosl that need to be provided using their exact implementations -- not a JavaScript re-implementation.
+
+### Node.js Sandbox
+
+A core part of this project was building a sandbox for Node.js using V8 isolates in the `@libsandbox/sandboxed-node` package. This package is completely independent of WASIX and can be used separately with different projects by providing your own virtual file system, network, and IO.
+
+This sandbox works by providing 2 sets of polyfills:
+
+- **System bridge**: These polyfills for libraries like `fs`, `child_process`, and `net` bridge the Node.js calls to the VM
+- **Isolated polyfill**: Polyfills for libraries such as `path` that don't depend on the host VM are provided by `node-stdlib-browser`
+
+The project includes a test suite of checkign that popular packages and CLI tools from the Node.js ecosystem work without issue.
+
+Future work could involve compiling the Node.js standard library to WebAssembly, similar to how WebContainers did this. However, this would likely impact bundle size and increase coldstarts.
+
+### Security
 
 TODO
 
-## Limitations
+TODO: Cloudflare Workers is the gold standard of using V8 isolates for isolated code execution at scale, so it helps to compare to them as a baseline.
 
-- Linux tools must be complied to WASIX (see other repo TODO)
-    - Does not support apt and other package managers. We've already compiled commonly used tools to WASIX and included in the runtime.
-- Native modules, including:
+### Limitation
+
+**This is not attempting to replace existing microVM solutions.**
+
+- Linux tools must be complied to WASIX, you cannot download arbitrary binaries (potential fix: leverage existing x86 -> WASM cross-compilers, akin to macOS Rosetta)
+- Does not support apt and other mainstream package managers
+- NPM packages that require native modules (planned fix), including:
     - esbuild
     - turbo
     - Biome
+- Sandboxed Node & WASIX cannot reach each other's networking (planned fix)
 
 ## Future Work
 
-- Browser support vs ServiceWorkers
-    - Requires tunneling for network traffic
-- Bun support (TBD)
-- Lazy FS loading
-- VS Code server support
+- Browser support
+- Bun support (TBD if possible)
+- VS Code Server
 - Publish WASIX patches for popular native libraries (esbuild, turbopack, etc)
+
+## Other Tools
+
+- [Wasmer SDK](TODO) Provides the core WASIX runtime. Consider using this if you don't need the V8 accelerator.
 
 ## License
 
