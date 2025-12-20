@@ -35,27 +35,30 @@ In WASIX errno definitions, 45 = `ENOEXEC` ("Executable file format error").
 
 See: https://wasmerio.github.io/wasmer/crates/doc/wasmer_wasix_types/wasi/bindings/enum.Errno.html
 
-## Root Cause (Hypothesis)
+## Root Cause
 
-Likely related to the WASIX libc `posix_spawn` PATH issue. WASIX libc's posix_spawn doesn't search PATH - commands must be resolved to absolute paths first. See `wasix-runtime/src/main.rs` where we use the `which` crate to work around this.
+**Bug is in wasix-libc, not bash.**
+
+WASIX libc's `posix_spawnp()` doesn't correctly search PATH. Per POSIX spec:
+- `posix_spawn()` - requires explicit pathname, doesn't search PATH
+- `posix_spawnp()` - SHOULD search PATH (like `execvp`)
+
+See: https://man7.org/linux/man-pages/man3/posix_spawn.3.html
+
+We already work around this in `wasix-runtime/src/main.rs` using the `which` crate to resolve commands to absolute paths before spawning.
 
 When bash runs `-c "echo hello"`:
-1. Bash may try to look up `echo` as an external command first via posix_spawn
-2. posix_spawn fails with ENOEXEC (45) because it can't find `echo` without PATH resolution
-3. Bash falls back to the builtin `echo` and executes it correctly (stdout works)
-4. But bash incorrectly propagates the ENOEXEC (45) from step 2 as the final exit code
+1. Bash tries to look up `echo` as external command via `posix_spawnp()`
+2. `posix_spawnp()` fails with ENOEXEC (45) because it doesn't search PATH correctly
+3. Bash falls back to the builtin `echo` and executes it (stdout works)
+4. Bash incorrectly propagates the ENOEXEC (45) as the final exit code
 
 This explains why:
-- External commands with absolute paths work (no PATH lookup needed)
-- `ls /` works (likely found in /bin via some lookup)
-- All builtins fail with 45 (ENOEXEC from the failed external command lookup)
+- External commands with absolute paths work (no PATH search needed)
+- `ls /` works (bash may find it differently, or it's in a default search location)
+- All builtins fail with 45 (ENOEXEC from the failed `posix_spawnp()` call)
 
-The fix would likely be in wasix-org/bash to either:
-1. Not attempt external command lookup for known builtins
-2. Not propagate posix_spawn errors when falling back to builtins
-3. Ensure PATH is properly set/searched before attempting posix_spawn
-
-Note: Interactive bash (via stdin) works correctly - exit codes are proper. This suggests the `-c` flag code path has a different command resolution order.
+Note: Interactive bash (via stdin) works correctly - likely uses a different code path that doesn't attempt external command lookup first.
 
 ## Impact on nanosandbox
 
@@ -86,5 +89,5 @@ Note: Interactive bash (via stdin) works correctly - exit codes are proper. This
 
 ## Status
 
-- **Open** - Waiting for fix in `sharrattj/bash` package
-- Consider filing issue at wasmer registry or bash package repo
+- **Open** - Bug is in wasix-libc's `posix_spawnp()` PATH handling
+- File issue at: https://github.com/wasix-org/wasix-libc/issues
