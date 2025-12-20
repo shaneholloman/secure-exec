@@ -9,6 +9,15 @@
 // This import installs them on globalThis before other imports execute.
 import "./polyfills.js";
 
+// Active handles mechanism - must be imported early so other modules can use it.
+// See: docs/ACTIVE_HANDLES.md
+import {
+	_registerHandle,
+	_unregisterHandle,
+	_waitForActiveHandles,
+	_getActiveHandles,
+} from "./active-handles.js";
+
 // File system module
 import fs from "./fs.js";
 
@@ -74,6 +83,12 @@ export {
   createRequire,
   Module,
   SourceMap,
+
+  // Active handles (see docs/ACTIVE_HANDLES.md)
+  _registerHandle,
+  _unregisterHandle,
+  _waitForActiveHandles,
+  _getActiveHandles,
 };
 
 // Default export is fs for backward compatibility

@@ -899,16 +899,31 @@ export class NodeProcess {
 			let nextSessionId = 1;
 			const sessions = new Map<number, SpawnedProcess>();
 
-			// Get dispatcher reference from isolate (set by bridge code)
-			const dispatchRef = context.global.getSync("_childProcessDispatch", {
-				reference: true,
-			}) as ivm.Reference<
+			// Lazy-initialized dispatcher reference from isolate
+			// We can't get this upfront because _childProcessDispatch is set by bridge code
+			// which loads AFTER these references are set up
+			let dispatchRef: ivm.Reference<
 				(
 					sessionId: number,
 					type: "stdout" | "stderr" | "exit",
 					data: Uint8Array | number,
 				) => void
-			>;
+			> | null = null;
+
+			const getDispatchRef = () => {
+				if (!dispatchRef) {
+					dispatchRef = context.global.getSync("_childProcessDispatch", {
+						reference: true,
+					}) as ivm.Reference<
+						(
+							sessionId: number,
+							type: "stdout" | "stderr" | "exit",
+							data: Uint8Array | number,
+						) => void
+					>;
+				}
+				return dispatchRef!;
+			};
 
 			// Start a spawn - returns session ID
 			const spawnStartRef = new ivm.Reference(
@@ -924,14 +939,14 @@ export class NodeProcess {
 						cwd: options.cwd,
 						env: options.env,
 						onStdout: (data) => {
-							dispatchRef.applySync(
+							getDispatchRef().applySync(
 								undefined,
 								[sessionId, "stdout", data],
 								{ arguments: { copy: true } },
 							);
 						},
 						onStderr: (data) => {
-							dispatchRef.applySync(
+							getDispatchRef().applySync(
 								undefined,
 								[sessionId, "stderr", data],
 								{ arguments: { copy: true } },
@@ -940,7 +955,7 @@ export class NodeProcess {
 					});
 
 					proc.wait().then((code) => {
-						dispatchRef.applySync(undefined, [sessionId, "exit", code]);
+						getDispatchRef().applySync(undefined, [sessionId, "exit", code]);
 						sessions.delete(sessionId);
 					});
 
@@ -1828,6 +1843,13 @@ export class NodeProcess {
 				exports = (await context.eval("module.exports", { copy: true })) as T;
 			}
 
+			// Wait for any active handles (child processes, etc.) to complete
+			// See: packages/sandboxed-node/docs/ACTIVE_HANDLES.md
+			await context.eval(
+				'typeof _waitForActiveHandles === "function" ? _waitForActiveHandles() : Promise.resolve()',
+				{ promise: true },
+			);
+
 			// Get exit code from process.exitCode if set
 			const exitCode = (await context.eval("process.exitCode || 0", {
 				copy: true,
@@ -2007,6 +2029,13 @@ export class NodeProcess {
 					await context.eval(`globalThis.__scriptResult__`, { promise: true });
 				}
 			}
+
+			// Wait for any active handles (child processes, etc.) to complete
+			// See: packages/sandboxed-node/docs/ACTIVE_HANDLES.md
+			await context.eval(
+				'typeof _waitForActiveHandles === "function" ? _waitForActiveHandles() : Promise.resolve()',
+				{ promise: true },
+			);
 
 			// Get exit code from process.exitCode if set
 			const exitCode = await context.eval("process.exitCode || 0", {
