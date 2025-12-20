@@ -9,12 +9,16 @@
 
 ## short term
 
+- get subprocesses working in separate project
+    - figure out the build target
+    - then get it working with our fork
 - clean up where load runtime is (it should be part of runtime.load())
 - implement child process with the host process context
 - clean up HostExecContext
 - remove js cruft from npm tests (raw npm should work fine)
 - get npm working in terminal
 - get basic ecosystem tests working
+- switch back to wasmer 0.10
 
 ## cleanup
 

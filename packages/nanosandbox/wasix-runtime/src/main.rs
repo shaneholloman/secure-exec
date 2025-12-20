@@ -145,15 +145,10 @@ struct SpawnRequest {
     cwd: String,
 }
 
-/// Information about a running child process (WASIX-based)
+/// Information about a running child process (spawned natively in WASIX)
 struct ChildProcess {
     child: Child,
-}
-
-/// Information about a child process running via host_exec (e.g., "node" commands)
-struct HostExecChild {
-    session: u64,        // The host_exec session for this child
-    parent_session: u64, // The parent session to forward output to
+    parent_session: u64, // Session to send output back to
 }
 
 fn main() {
@@ -208,13 +203,9 @@ fn run_event_loop(session: u64) {
     let mut stdin_buf = vec![0u8; 4096];     // 4KB buffer for stdin
     let mut stdin_closed = false;
 
-    // Child process management (WASIX-based children)
+    // Child process management (spawned natively in WASIX)
     let mut children: HashMap<u64, ChildProcess> = HashMap::new();
     let mut child_output_buf = vec![0u8; 8192]; // Buffer for reading child output
-
-    // Host_exec-based children (for "node" commands)
-    let mut host_exec_children: HashMap<u64, HostExecChild> = HashMap::new();
-    let mut host_exec_child_buf = vec![0u8; 64 * 1024]; // Buffer for host_exec child output
 
     // Subscriptions for poll_oneoff:
     // [0] = stdin (fd 0) for reading
@@ -317,7 +308,7 @@ fn run_event_loop(session: u64) {
                     exit(exit_code);
                 }
                 MSG_TYPE_SPAWN_REQUEST => {
-                    handle_spawn_request(session, &host_buf[..data_len], &mut children, &mut host_exec_children);
+                    handle_spawn_request(session, &host_buf[..data_len], &mut children);
                 }
                 MSG_TYPE_SPAWN_STDIN => {
                     handle_spawn_stdin(&host_buf[..data_len], &mut children);
@@ -336,10 +327,7 @@ fn run_event_loop(session: u64) {
         }
 
         // Check child processes for output
-        check_child_processes(session, &mut children, &mut child_output_buf);
-
-        // Check host_exec-based children (node commands) for output
-        check_host_exec_children(&mut host_exec_children, &mut host_exec_child_buf);
+        check_child_processes(&mut children, &mut child_output_buf);
 
         // Now wait for stdin or timeout using poll_oneoff
         let num_subs = if stdin_closed { 1 } else { 2 };
@@ -417,12 +405,11 @@ fn run_event_loop(session: u64) {
     }
 }
 
-/// Handle a SPAWN_REQUEST message - spawn a new child process
+/// Handle a SPAWN_REQUEST message - spawn a new child process natively in WASIX
 fn handle_spawn_request(
     parent_session: u64,
     data: &[u8],
     children: &mut HashMap<u64, ChildProcess>,
-    host_exec_children: &mut HashMap<u64, HostExecChild>,
 ) {
     let spawn_req: SpawnRequest = match serde_json::from_slice(data) {
         Ok(req) => req,
@@ -437,35 +424,92 @@ fn handle_spawn_request(
         spawn_req.child_id, spawn_req.command, spawn_req.args
     );
 
-    // Route ALL commands through host_exec so they run on the host
-    // This is necessary because WASIX doesn't have binaries for common commands
-    // like echo, ls, cat, etc. The host (Node.js) can execute these.
-    handle_spawn_via_host_exec(parent_session, spawn_req, host_exec_children);
-}
+    // WASIX requires PATH to be set to /bin for subprocess spawning to work
+    // This is where coreutils binaries are located
+    std::env::set_var("PATH", "/bin");
 
-/// Handle spawning a command via host_exec (runs on the host, not in WASIX)
-fn handle_spawn_via_host_exec(
-    parent_session: u64,
-    spawn_req: SpawnRequest,
-    host_exec_children: &mut HashMap<u64, HostExecChild>,
-) {
-    // Create a host_exec request for the command
-    let request = Request {
-        command: spawn_req.command.clone(),
-        args: spawn_req.args.clone(),
-        env: spawn_req.env.clone(),
-        cwd: if spawn_req.cwd.is_empty() {
-            "/".to_string()
-        } else {
-            spawn_req.cwd.clone()
-        },
+    // Resolve command using PATH - WASIX libc's posix_spawn doesn't search PATH,
+    // so we need to use the `which` crate to find the absolute path
+    let command_path = if spawn_req.command.starts_with('/') {
+        // Already absolute path
+        std::path::PathBuf::from(&spawn_req.command)
+    } else {
+        // Use `which` to search PATH
+        match which::which(&spawn_req.command) {
+            Ok(path) => path,
+            Err(e) => {
+                let error_msg = format!(
+                    "[wasix-shim] Command not found: {} (PATH=/bin, error: {})\n",
+                    spawn_req.command, e
+                );
+                eprintln!("{}", error_msg);
+
+                // Send error to child's stderr
+                unsafe {
+                    host_exec_child_output(
+                        parent_session,
+                        spawn_req.child_id,
+                        MSG_TYPE_CHILD_STDERR,
+                        error_msg.as_ptr(),
+                        error_msg.len(),
+                    );
+                }
+
+                // Send exit code 127 (command not found)
+                let exit_code: i32 = 127;
+                let exit_data = exit_code.to_le_bytes();
+                unsafe {
+                    host_exec_child_output(
+                        parent_session,
+                        spawn_req.child_id,
+                        MSG_TYPE_CHILD_EXIT,
+                        exit_data.as_ptr(),
+                        exit_data.len(),
+                    );
+                }
+                return;
+            }
+        }
     };
 
-    let request_json = match serde_json::to_vec(&request) {
-        Ok(j) => j,
+    eprintln!("[wasix-shim] Resolved command path: {}", command_path.display());
+
+    // Spawn the command - WASIX provides commands from dependencies (coreutils, bash)
+    // as WASM modules that can be executed via Command::new with absolute paths
+    let result = Command::new(&command_path)
+        .args(&spawn_req.args)
+        .envs(&spawn_req.env)
+        .current_dir(if spawn_req.cwd.is_empty() { "/" } else { &spawn_req.cwd })
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+
+    match result {
+        Ok(child) => {
+            eprintln!("[wasix-shim] Child {} spawned successfully", spawn_req.child_id);
+            children.insert(spawn_req.child_id, ChildProcess {
+                child,
+                parent_session,
+            });
+        }
         Err(e) => {
-            eprintln!("[wasix-shim] Failed to serialize child request: {}", e);
-            let exit_code: i32 = -1;
+            let error_msg = format!("[wasix-shim] Failed to spawn child {} ({}): {}\n", spawn_req.child_id, spawn_req.command, e);
+            eprintln!("{}", error_msg);
+
+            // Send error to child's stderr so it's visible in test output
+            unsafe {
+                host_exec_child_output(
+                    parent_session,
+                    spawn_req.child_id,
+                    MSG_TYPE_CHILD_STDERR,
+                    error_msg.as_ptr(),
+                    error_msg.len(),
+                );
+            }
+
+            // Send exit code 127 (command not found)
+            let exit_code: i32 = 127;
             let exit_data = exit_code.to_le_bytes();
             unsafe {
                 host_exec_child_output(
@@ -476,43 +520,8 @@ fn handle_spawn_via_host_exec(
                     exit_data.len(),
                 );
             }
-            return;
         }
-    };
-
-    // Start a new host_exec session for the node child
-    let mut child_session: u64 = 0;
-    let errno = unsafe {
-        host_exec_start(
-            request_json.as_ptr(),
-            request_json.len(),
-            &mut child_session,
-        )
-    };
-
-    if errno != 0 {
-        eprintln!("[wasix-shim] Failed to start child session: errno {}", errno);
-        let exit_code: i32 = -1;
-        let exit_data = exit_code.to_le_bytes();
-        unsafe {
-            host_exec_child_output(
-                parent_session,
-                spawn_req.child_id,
-                MSG_TYPE_CHILD_EXIT,
-                exit_data.as_ptr(),
-                exit_data.len(),
-            );
-        }
-        return;
     }
-
-    eprintln!("[wasix-shim] Child {} started with session {}", spawn_req.child_id, child_session);
-
-    // Track the host_exec child
-    host_exec_children.insert(spawn_req.child_id, HostExecChild {
-        session: child_session,
-        parent_session,
-    });
 }
 
 /// Handle SPAWN_STDIN message - write data to child's stdin
@@ -594,14 +603,15 @@ fn handle_spawn_kill(
 
 /// Check all child processes for output and exit status
 fn check_child_processes(
-    session: u64,
     children: &mut HashMap<u64, ChildProcess>,
     buf: &mut [u8],
 ) {
     // Collect child IDs that have exited (can't modify while iterating)
-    let mut exited: Vec<(u64, i32)> = Vec::new();
+    let mut exited: Vec<(u64, i32, u64)> = Vec::new(); // (child_id, exit_code, parent_session)
 
     for (child_id, child_proc) in children.iter_mut() {
+        let parent_session = child_proc.parent_session;
+
         // Check for stdout
         if let Some(ref mut stdout) = child_proc.child.stdout {
             // Try to read (non-blocking in WASIX)
@@ -613,7 +623,7 @@ fn check_child_processes(
                     // Send stdout data to host
                     unsafe {
                         host_exec_child_output(
-                            session,
+                            parent_session,
                             *child_id,
                             MSG_TYPE_CHILD_STDOUT,
                             buf.as_ptr(),
@@ -640,7 +650,7 @@ fn check_child_processes(
                     // Send stderr data to host
                     unsafe {
                         host_exec_child_output(
-                            session,
+                            parent_session,
                             *child_id,
                             MSG_TYPE_CHILD_STDERR,
                             buf.as_ptr(),
@@ -662,7 +672,7 @@ fn check_child_processes(
             Ok(Some(status)) => {
                 let exit_code = status.code().unwrap_or(-1);
                 eprintln!("[wasix-shim] Child {} exited with code {}", child_id, exit_code);
-                exited.push((*child_id, exit_code));
+                exited.push((*child_id, exit_code, parent_session));
             }
             Ok(None) => {
                 // Still running
@@ -674,12 +684,12 @@ fn check_child_processes(
     }
 
     // Remove exited children and send exit notifications
-    for (child_id, exit_code) in exited {
+    for (child_id, exit_code, parent_session) in exited {
         children.remove(&child_id);
         let exit_data = exit_code.to_le_bytes();
         unsafe {
             host_exec_child_output(
-                session,
+                parent_session,
                 child_id,
                 MSG_TYPE_CHILD_EXIT,
                 exit_data.as_ptr(),
@@ -689,101 +699,3 @@ fn check_child_processes(
     }
 }
 
-/// Check all host_exec-based children (node commands) for output and exit status
-fn check_host_exec_children(
-    host_exec_children: &mut HashMap<u64, HostExecChild>,
-    buf: &mut [u8],
-) {
-    // Collect child IDs that have exited
-    let mut exited: Vec<u64> = Vec::new();
-
-    for (child_id, host_child) in host_exec_children.iter() {
-        // Poll the child's host_exec session for data
-        let mut ready: u32 = 0;
-        let errno = unsafe { host_exec_poll(host_child.session, &mut ready) };
-
-        if errno != 0 {
-            eprintln!("[wasix-shim] host_exec_poll failed for child {}: errno {}", child_id, errno);
-            continue;
-        }
-
-        if ready == 0 {
-            // No data available
-            continue;
-        }
-
-        // Read data from the child's session
-        let mut msg_type: u32 = 0;
-        let mut data_len: usize = buf.len();
-        let errno = unsafe {
-            host_exec_try_read(
-                host_child.session,
-                &mut msg_type,
-                buf.as_mut_ptr(),
-                &mut data_len,
-            )
-        };
-
-        if errno == 6 {
-            // EAGAIN - no data available
-            continue;
-        }
-
-        if errno != 0 {
-            eprintln!("[wasix-shim] host_exec_try_read failed for child {}: errno {}", child_id, errno);
-            continue;
-        }
-
-        // Forward the data to the parent session
-        match msg_type {
-            HOST_EXEC_STDOUT => {
-                // Forward stdout to parent as CHILD_STDOUT
-                unsafe {
-                    host_exec_child_output(
-                        host_child.parent_session,
-                        *child_id,
-                        MSG_TYPE_CHILD_STDOUT,
-                        buf.as_ptr(),
-                        data_len,
-                    );
-                }
-            }
-            HOST_EXEC_STDERR => {
-                // Forward stderr to parent as CHILD_STDERR
-                unsafe {
-                    host_exec_child_output(
-                        host_child.parent_session,
-                        *child_id,
-                        MSG_TYPE_CHILD_STDERR,
-                        buf.as_ptr(),
-                        data_len,
-                    );
-                }
-            }
-            HOST_EXEC_EXIT => {
-                // Child exited - forward exit code
-                let exit_code = data_len as i32;
-                eprintln!("[wasix-shim] Host_exec child {} exited with code {}", child_id, exit_code);
-                let exit_data = exit_code.to_le_bytes();
-                unsafe {
-                    host_exec_child_output(
-                        host_child.parent_session,
-                        *child_id,
-                        MSG_TYPE_CHILD_EXIT,
-                        exit_data.as_ptr(),
-                        exit_data.len(),
-                    );
-                }
-                exited.push(*child_id);
-            }
-            _ => {
-                eprintln!("[wasix-shim] Unknown message type {} from child {}", msg_type, child_id);
-            }
-        }
-    }
-
-    // Remove exited children
-    for child_id in exited {
-        host_exec_children.remove(&child_id);
-    }
-}
