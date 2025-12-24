@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import { Runtime } from "../src/runtime/index.js";
 
-describe("VirtualMachine", () => {
+describe("Runtime", () => {
 	let runtime: Runtime;
 
 	beforeAll(async () => {

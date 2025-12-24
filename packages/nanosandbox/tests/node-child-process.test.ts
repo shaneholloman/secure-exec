@@ -139,6 +139,30 @@ describe("Child Process from Sandboxed Node", () => {
 			const vm = await runtime.run("node", { args: ["-e", script] });
 			expect(vm.stdout).toContain("exit code: 0");
 		}, 30000);
+
+		it("should handle multiple concurrent spawns", async () => {
+			const script = `
+				const { spawn } = require('child_process');
+
+				let results = [];
+				let pending = 2;
+
+				const child1 = spawn('echo', ['first']);
+				const child2 = spawn('echo', ['second']);
+
+				child1.stdout.on('data', (data) => results.push('1:' + data.toString().trim()));
+				child2.stdout.on('data', (data) => results.push('2:' + data.toString().trim()));
+
+				child1.on('close', () => { if (--pending === 0) done(); });
+				child2.on('close', () => { if (--pending === 0) done(); });
+
+				function done() {
+					console.log('results:', results.sort().join(','));
+				}
+			`;
+			const vm = await runtime.run("node", { args: ["-e", script] });
+			expect(vm.stdout).toContain("results: 1:first,2:second");
+		}, 30000);
 	});
 
 	// exec callback tests work with active handles, but bash -c returns wrong exit codes

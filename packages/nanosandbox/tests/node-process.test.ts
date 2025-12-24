@@ -14,6 +14,14 @@ describe("Node Process", () => {
 		runtime = await Runtime.load();
 	});
 
+	describe("Sanity check", () => {
+		it("bash echo works (verifies runtime without host_exec)", async () => {
+			const vm = await runtime.run("bash", { args: ["-c", "echo hello"] });
+			expect(vm.stdout.trim()).toBe("hello");
+			expect(vm.code).toBe(0);
+		});
+	});
+
 	describe("Basic execution", () => {
 		it("should execute node -e directly", async () => {
 			const vm = await runtime.run("node", {
