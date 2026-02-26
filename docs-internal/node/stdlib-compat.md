@@ -1,10 +1,8 @@
 # Node.js Standard Library Compatibility
 
-Status of each Node.js core module in sandboxed-node. Modules are provided via one of three mechanisms:
+Status of each Node.js core module in sandboxed-node.
 
-- **Bridge** — Custom implementation in `src/bridge/`, communicates with host via `ivm.Reference`
-- **Polyfill** — Provided by `node-stdlib-browser` (e.g., `path-browserify`, `readable-stream`)
-- **Stub** — Minimal implementation for compatibility, may return mocks or throw
+## Support Tiers
 
 ## Permission model
 
@@ -14,211 +12,187 @@ Status of each Node.js core module in sandboxed-node. Modules are provided via o
 - Embedders can opt in to permissive behavior with `allowAll`, or selectively via
   `allowAllFs`, `allowAllNetwork`, `allowAllChildProcess`, and `allowAllEnv`.
 
-## fs
+| Tier | Label | Runtime behavior |
+| --- | --- | --- |
+| 1 | Bridge | Custom implementation in `packages/sandboxed-node/src/bridge/` with host bridge hooks where needed. |
+| 2 | Polyfill | Provided by `node-stdlib-browser` and related browser-compatible packages. |
+| 3 | Stub | Minimal compatibility surface, usually for `instanceof` checks or lightweight usage. |
+| 4 | Deferred | Not fully implemented; `require()` succeeds and returned APIs throw deterministic unsupported errors on call. |
+| 5 | Unsupported | Not implemented by design; `require()` throws immediately. |
 
-- Bridge implementation (`src/bridge/fs.ts`, ~1800 lines)
-- `readFile`, `readFileSync`, `writeFile`, `writeFileSync`, `appendFile`, `appendFileSync`
-- `open`, `openSync`, `read`, `readSync`, `write`, `writeSync`, `close`, `closeSync`
-- `readdir`, `readdirSync` (with `Dirent` support)
-- `mkdir`, `mkdirSync` (recursive)
-- `rmdir`, `rmdirSync` (recursive), `rm`, `rmSync`
-- `unlink`, `unlinkSync`
-- `stat`, `statSync`, `lstat`, `lstatSync` (full `Stats` class implementing `nodeFs.Stats`)
-- `rename`, `renameSync`
-- `copyFile`, `copyFileSync`
-- `exists`, `existsSync`
-- `createReadStream`, `createWriteStream`
-- `writev`, `writevSync`
-- `fs.promises` — async versions of all above
-- Missing: `watch`, `watchFile`, `access`, `chmod`, `chown`, `link`, `symlink`, `readlink`, `truncate`, `utimes`, `realpath`
+Deterministic unsupported API format: `"<module>.<api> is not supported in sandbox"`.
 
-## process
+## fs (Tier 1: Bridge)
 
-- Bridge implementation (`src/bridge/process.ts`, ~1050 lines)
-- `platform`, `arch`, `version`, `versions`, `pid`, `ppid`, `execPath`, `execArgv`, `argv`, `title`
-- `env` (permission-gated per variable)
-- `cwd()`, `chdir()`
-- `exit()` (throws `ProcessExitError`), `exitCode`, `abort()`
-- `nextTick()` (via `queueMicrotask`)
-- `hrtime()`, `hrtime.bigint()`
-- `getuid`, `getgid`, `geteuid`, `getegid`, `getgroups`
-- `umask()`, `uptime()`, `kill()`
-- `memoryUsage()`, `cpuUsage()`, `resourceUsage()` — mock values
-- `stdout`, `stderr` — bridge to host `_log`/`_error`
-- `stdin` — full implementation with data/end/close events, async iterator
-- Full `EventEmitter` support (`on`, `once`, `off`, `emit`, `prependListener`, etc.)
-- `emitWarning()`, `binding()` (stub), `send()` (no-op)
+- Bridge implementation (`src/bridge/fs.ts`)
+- Implemented: `readFile`, `writeFile`, `appendFile`, `open`, `read`, `write`, `close`, `readdir`, `mkdir`, `rmdir`, `rm`, `unlink`, `stat`, `lstat`, `rename`, `copyFile`, `exists`, `createReadStream`, `createWriteStream`, `writev`, `access`, `realpath`
+- `fs.promises` exposes async variants of implemented APIs
+- Deferred APIs with deterministic errors:
+  - `fs.watch is not supported in sandbox`
+  - `fs.watchFile is not supported in sandbox`
+  - `fs.chmod is not supported in sandbox`
+  - `fs.chown is not supported in sandbox`
+  - `fs.link is not supported in sandbox`
+  - `fs.symlink is not supported in sandbox`
+  - `fs.readlink is not supported in sandbox`
+  - `fs.truncate is not supported in sandbox`
+  - `fs.utimes is not supported in sandbox`
 
-## os
-
-- Bridge implementation (`src/bridge/os.ts`, ~295 lines)
-- `platform()`, `arch()`, `type()`, `release()`, `version()` — all configurable via `OSConfig`
-- `homedir()`, `tmpdir()`, `hostname()` — configurable
-- `userInfo()`, `cpus()` (1 virtual CPU), `totalmem()`, `freemem()`, `loadavg()`
-- `networkInterfaces()` — returns empty object
-- `endianness()`, `EOL`, `devNull`, `machine()`, `availableParallelism()`
-- `constants.signals` (31 signals), `constants.errno` (60+ codes), `constants.priority`, `constants.dlopen`
-
-## child_process
-
-- Bridge implementation (`src/bridge/child-process.ts`, ~700 lines)
-- `spawn()` — streaming with stdin/stdout/stderr, kill support
-- `spawnSync()` — synchronous via `_childProcessSpawnSync` bridge
-- `exec()`, `execSync()` — shell command execution
-- `execFile()`, `execFileSync()`
-- `ChildProcess` class with pid, streams, kill, signal handling
-- Active handle tracking (keeps sandbox alive while children run)
-- Missing: `fork()` (IPC not supported across isolate boundary)
-
-## http / https
-
-- Bridge implementation (`src/bridge/network.ts`, ~880 lines)
-- `request()`, `get()` — backed by host-side `_networkHttpRequestRaw`
-- `createServer()` — bridged to host-side `NetworkAdapter.httpServerListen/httpServerClose`
-- `ClientRequest` class with event support
-- `IncomingMessage` class with stream support
-- `Agent` class (simplified), `globalAgent`
-- `METHODS`, `STATUS_CODES` constants
-- Server bindings are loopback-restricted in Node driver (`127.0.0.1` / `::1`; `0.0.0.0` is coerced to loopback)
-- `http2` compatibility stubs exported for `Http2ServerRequest`/`Http2ServerResponse` instanceof checks
-
-## dns
-
-- Bridge implementation (`src/bridge/network.ts`)
-- `lookup()`, `resolve()`, `resolve4()`, `resolve6()`
-- `dns.promises.lookup()`, `dns.promises.resolve()`
-- Simplified — all resolution delegates to host `_networkDnsLookupRaw`
-
-## fetch API
-
-- Bridge implementation (`src/bridge/network.ts`)
-- `fetch()` — full async fetch via host bridge
-- `Headers`, `Request`, `Response` classes
-- `Response.error()`, `Response.redirect()`
-- Installed on `globalThis`
-
-## module
-
-- Bridge implementation (`src/bridge/module.ts`, ~420 lines)
-- `createRequire()` — fully functional, resolves relative to filename
-- `Module` class with `id`, `path`, `exports`, `loaded`, `children`, `require()`, `_compile()`
-- Static: `builtinModules`, `isBuiltin()`, `_resolveFilename()`, `_load()`, `_nodeModulePaths()`, `wrap()`
-- ESM support via esbuild transform + `__dynamicImport` fallback
-
-## path
-
-- Polyfill via `path-browserify`
-- All standard functions available
-- Patched: `resolve()` uses `process.cwd()`, `win32`/`posix` variants present
-
-## buffer
-
-- Polyfill via `buffer` npm package
-- Full `Buffer` class, installed as global
-- Binary data crosses isolate boundary via base64 encoding
-
-## url
-
-- Polyfill via `whatwg-url`
-- `URL`, `URLSearchParams` (spec-compliant)
-- Patched: relative `file:` URLs resolve against `process.cwd()`
-- Legacy `url.parse()`, `url.format()` via node-stdlib-browser
-
-## events
-
-- Polyfill via node-stdlib-browser (`events` package)
-- Full `EventEmitter` class
-
-## stream
-
-- Polyfill via node-stdlib-browser (`readable-stream`)
-- `Readable`, `Writable`, `Duplex`, `Transform`, `PassThrough`
-- `pipeline()`, `finished()`
-
-## util
-
-- Polyfill via node-stdlib-browser
-- `inspect()`, `format()`, `formatWithOptions()`, type checking functions, deprecation helpers
-
-## assert
-
-- Polyfill via node-stdlib-browser
-- All assertion functions, strict and loose variants
-
-## querystring
-
-- Polyfill via node-stdlib-browser
-- `parse()`, `stringify()`, `escape()`, `unescape()`
-
-## string_decoder
-
-- Polyfill via node-stdlib-browser
-- `StringDecoder` class for multibyte UTF-8
-
-## zlib
-
-- Polyfill via node-stdlib-browser
-- Compression/decompression available, may have limitations vs native
-
-## timers
+## process (Tier 1: Bridge)
 
 - Bridge implementation (`src/bridge/process.ts`)
-- `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `setImmediate`, `clearImmediate`
-- All return `TimerHandle` with `ref()`, `unref()`, `hasRef()`, `refresh()`
+- Supports env access (permission-gated), cwd/chdir, exit semantics, timers, stdio, eventing, and basic usage/system metadata APIs
 
-## crypto
+## os (Tier 1: Bridge)
 
-- Minimal — only random value generation
-- `getRandomValues()` — stub using `Math.random()` (not cryptographically secure)
-- `randomUUID()` — RFC 4122 UUID generation
-- `subtle.*` — throws "not supported in sandbox"
-- No hashing, signing, cipher, or HMAC functions
-- node-stdlib-browser's `crypto-browserify` available as polyfill but `subtle` operations blocked
+- Bridge implementation (`src/bridge/os.ts`)
+- Supports platform/arch/version, user/system info, and `os.constants`
 
-## tty
+## child_process (Tier 1: Bridge)
 
-- Polyfill via `node-stdlib-browser` (`tty-browserify`)
-- `isatty()` — returns `false`
-- `ReadStream`, `WriteStream` — present for compatibility but not implemented (constructors throw)
+- Bridge implementation (`src/bridge/child-process.ts`)
+- Implemented: `spawn`, `spawnSync`, `exec`, `execSync`, `execFile`, `execFileSync`
+- Unsupported API with deterministic error:
+  - `child_process.fork is not supported in sandbox`
+- Rationale: `fork()` requires Node IPC across isolate boundaries and is intentionally unsupported
 
-## v8
+## http (Tier 1: Bridge)
 
-- Pre-registered module-cache stub (`src/index.ts`, isolate setup)
-- `getHeapStatistics()` — mock values (64MB total, 50MB used)
-- `serialize()`, `deserialize()` — JSON-based (not real V8 serialization)
-- `setFlagsFromString()` — no-op
+- Bridge implementation (`src/bridge/network.ts`)
+- Implemented: `request`, `get`, `createServer`
+- Includes bridged `ClientRequest`, `IncomingMessage`, `Server`, `ServerResponse`, `Agent`, and constants
+- Server bindings are loopback-restricted by the Node driver
 
-## constants
+## https (Tier 1: Bridge)
 
-- Polyfill via `node-stdlib-browser` (`constants-browserify`)
-- Large constant surface including `SIGTERM`, errno values, fs flags, SSL constants
-- `os.constants` remains available from the `os` bridge module
+- Bridge implementation (`src/bridge/network.ts`)
+- Implemented: `request`, `get`, `createServer` with the same bridge contract as `http`
 
-## vm
+## http2 (Tier 3: Stub, Tier 5 full support)
+
+- Stub implementation (`src/bridge/network.ts`) for compatibility checks only
+- Exposes `Http2ServerRequest` and `Http2ServerResponse` classes for `instanceof` compatibility
+- Unsupported APIs with deterministic errors:
+  - `http2.createServer is not supported in sandbox`
+  - `http2.createSecureServer is not supported in sandbox`
+- Rationale: full HTTP/2 session/stream behavior is not implemented
+
+## dns (Tier 1: Bridge)
+
+- Bridge implementation (`src/bridge/network.ts`)
+- Implemented: `lookup`, `resolve`, `resolve4`, `resolve6`, and `dns.promises` variants
+
+## module (Tier 1: Bridge)
+
+- Bridge implementation (`src/bridge/module.ts`)
+- Implements `createRequire`, `Module` basics, and runtime builtin resolution
+
+## timers (Tier 1: Bridge)
+
+- Bridge implementation (`src/bridge/process.ts`)
+- Implements `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `setImmediate`, `clearImmediate`
+
+## path (Tier 2: Polyfill)
+
+- Polyfill via `path-browserify`
+
+## buffer (Tier 2: Polyfill)
+
+- Polyfill via `buffer`
+
+## url (Tier 2: Polyfill)
+
+- Polyfill via `whatwg-url` and node-stdlib-browser compatibility shims
+
+## events (Tier 2: Polyfill)
+
+- Polyfill via `events`
+
+## stream (Tier 2: Polyfill)
+
+- Polyfill via `readable-stream`
+
+## util (Tier 2: Polyfill)
 
 - Polyfill via node-stdlib-browser
-- Limited functionality — not a real sandbox (same as Node's `vm` module limitations)
 
-## Not implemented
+## assert (Tier 2: Polyfill)
 
-- **net** — no socket networking
-- **tls** — no TLS/SSL
-- **dgram** — no UDP
-- **http2** — no HTTP/2
-- **cluster** — no worker clustering
-- **worker_threads** — no threading
-- **wasi** — no WebAssembly System Interface
-- **perf_hooks** — no performance monitoring
-- **async_hooks** — no async context tracking
-- **diagnostics_channel** — no diagnostics
-- **inspector** — no debugger protocol
-- **repl** — no interactive shell
-- **readline** — no line editing (stdin has basic async iterator)
-- **trace_events** — no tracing
-- **domain** — deprecated, not implemented
+- Polyfill via node-stdlib-browser
 
-## Third-party bridge modules
+## querystring (Tier 2: Polyfill)
 
-These are not Node.js core modules but are still bridged:
+- Polyfill via node-stdlib-browser
 
-- **@hono/node-server** — full bridge implementation (`serve()`, `createAdaptorServer()`)
+## string_decoder (Tier 2: Polyfill)
+
+- Polyfill via node-stdlib-browser
+
+## zlib (Tier 2: Polyfill)
+
+- Polyfill via node-stdlib-browser
+
+## vm (Tier 2: Polyfill)
+
+- Polyfill via node-stdlib-browser
+
+## crypto (Tier 3: Stub)
+
+- Bridge/polyfill blend with intentionally limited surface
+- `getRandomValues()` is backed by `Math.random()` and is **NOT cryptographically secure**
+- `randomUUID()` is available
+- `subtle.*` is unsupported and throws deterministic errors:
+  - `crypto.subtle.digest is not supported in sandbox`
+  - `crypto.subtle.encrypt is not supported in sandbox`
+  - `crypto.subtle.decrypt is not supported in sandbox`
+- No hashing, signing, cipher, or HMAC APIs are supported
+
+## tty (Tier 2: Polyfill)
+
+- Polyfill via `node-stdlib-browser` (`tty-browserify`)
+- `isatty()` returns `false`
+- `ReadStream`/`WriteStream` are compatibility constructors
+
+## v8 (Tier 3: Stub)
+
+- Pre-registered module-cache stub in `src/index.ts`
+- Provides mock heap stats and JSON-based `serialize`/`deserialize`
+
+## constants (Tier 2: Polyfill)
+
+- Polyfill via `node-stdlib-browser` (`constants-browserify`)
+- `os.constants` remains available from the `os` bridge module
+
+## fetch API (Tier 1: Bridge)
+
+- Global fetch surface (`fetch`, `Headers`, `Request`, `Response`) bridged via `src/bridge/network.ts`
+
+## Deferred Core Modules (Tier 4)
+
+`require()` returns a stub object; calling its APIs throws deterministic unsupported errors.
+
+- `net`: deferred for future socket client/server compatibility work
+- `tls`: deferred because practical client use-cases exist once `net` is expanded
+- `readline`: deferred for CLI compatibility after richer stdin/tty behavior
+- `perf_hooks`: deferred for diagnostic/timing parity work
+- `async_hooks`: deferred for advanced framework compatibility
+- `worker_threads`: deferred for future isolate/runtime architecture work
+
+## Unsupported Core Modules (Tier 5)
+
+`require()` throws immediately with `"<module> is not supported in sandbox"`.
+
+- `dgram`: UDP sockets are out of scope for sandbox runtime design
+- `cluster`: multi-process clustering is incompatible with isolate model
+- `wasi`: WASI host bindings are intentionally out of scope
+- `diagnostics_channel`: diagnostics bus is not part of sandbox contract
+- `inspector`: debugger protocol is intentionally unavailable inside sandbox
+- `repl`: interactive shell is not part of runtime embedding model
+- `trace_events`: tracing pipeline is unsupported in sandbox runtime
+- `domain`: deprecated Node API, intentionally unsupported
+
+Full HTTP/2 behavior is also Tier 5 unsupported; only compatibility stubs are provided under the `http2` module section above.
+
+## Third-Party Stubs
+
+No third-party module stubs are currently registered in runtime require setup.

@@ -31,21 +31,17 @@
 - [ ] Make console capture robust for circular objects (avoid `JSON.stringify` throw paths in logging).
   - `packages/sandboxed-node/src/index.ts`
 
-- [ ] Reconcile `docs-internal/node/STDLIB_COMPATIBILITY.md` with current runtime behavior.
-  - Remove stale third-party bridge notes (for example `@hono/node-server`) and keep module status accurate after bridge changes.
-  - Ensure `http`/`https`/`http2` sections reflect built-in-only bridge policy and current support limits.
+- [x] Reconcile `docs-internal/node/STDLIB_COMPATIBILITY.md` with current runtime behavior.
+  - Fix: completed in `codify-stdlib-support-policy` (remove stale third-party bridge notes, align `http`/`https`/`http2` sections, add support tiers).
 
-- [ ] Close or explicitly codify missing `fs` APIs listed in compatibility docs.
-  - Missing list currently includes: `watch`, `watchFile`, `access`, `chmod`, `chown`, `link`, `symlink`, `readlink`, `truncate`, `utimes`, `realpath`.
-  - Decide per API: implement bridge support vs explicit unsupported error contract.
+- [x] Close or explicitly codify missing `fs` APIs listed in compatibility docs.
+  - Fix: completed in `codify-stdlib-support-policy` (`access`/`realpath` documented as implemented; missing APIs now use deterministic unsupported errors).
 
-- [ ] Decide `child_process.fork()` support level.
-  - Either implement a constrained fork/IPC model for sandboxed-node or mark `fork` as explicitly unsupported with deterministic runtime errors/tests.
+- [x] Decide `child_process.fork()` support level.
+  - Fix: completed in `codify-stdlib-support-policy` (`fork` marked unsupported with deterministic `child_process.fork is not supported in sandbox` error).
 
-- [ ] Tighten crypto support policy and implementation.
-  - Replace non-cryptographic random stubs where security-sensitive APIs are exposed, or explicitly disable them with clear errors.
-  - Document exact supported crypto surface in compatibility docs and tests.
+- [x] Tighten crypto support policy and implementation.
+  - Fix: completed in `codify-stdlib-support-policy` (explicit insecurity warning for `getRandomValues`, deterministic `crypto.subtle.*` unsupported errors, tiered policy documented).
 
-- [ ] Track unimplemented core modules from compatibility docs as explicit product decisions.
-  - Current list includes: `net`, `tls`, `dgram`, `http2` (full), `cluster`, `worker_threads`, `wasi`, `perf_hooks`, `async_hooks`, `diagnostics_channel`, `inspector`, `repl`, `readline`, `trace_events`, `domain`.
-  - For each module, decide: implement now, defer, or permanently unsupported; enforce consistent runtime behavior and docs.
+- [x] Track unimplemented core modules from compatibility docs as explicit product decisions.
+  - Fix: completed in `codify-stdlib-support-policy` (Tier 4 Deferred vs Tier 5 Unsupported classifications with rationale and runtime policy).

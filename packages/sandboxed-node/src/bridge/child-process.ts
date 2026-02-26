@@ -683,7 +683,7 @@ function fork(
   _args?: readonly string[] | nodeChildProcess.ForkOptions,
   _options?: nodeChildProcess.ForkOptions
 ): never {
-  throw new Error("child_process.fork is not implemented in sandbox (IPC not supported)");
+  throw new Error("child_process.fork is not supported in sandbox");
 }
 
 // Create the child_process module

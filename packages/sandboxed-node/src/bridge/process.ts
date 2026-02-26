@@ -978,13 +978,13 @@ export const cryptoPolyfill = {
 
   subtle: {
     digest(): Promise<ArrayBuffer> {
-      throw new Error("crypto.subtle.digest not supported in sandbox");
+      throw new Error("crypto.subtle.digest is not supported in sandbox");
     },
     encrypt(): Promise<ArrayBuffer> {
-      throw new Error("crypto.subtle.encrypt not supported in sandbox");
+      throw new Error("crypto.subtle.encrypt is not supported in sandbox");
     },
     decrypt(): Promise<ArrayBuffer> {
-      throw new Error("crypto.subtle.decrypt not supported in sandbox");
+      throw new Error("crypto.subtle.decrypt is not supported in sandbox");
     },
   },
 };

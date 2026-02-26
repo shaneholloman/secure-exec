@@ -121,6 +121,53 @@ export function getRequireSetupCode(): string {
         return result;
       }
 
+      // Set up support-tier policy for unimplemented core modules
+      const _deferredCoreModules = new Set([
+        'net',
+        'tls',
+        'readline',
+        'perf_hooks',
+        'async_hooks',
+        'worker_threads',
+      ]);
+      const _unsupportedCoreModules = new Set([
+        'dgram',
+        'cluster',
+        'wasi',
+        'diagnostics_channel',
+        'inspector',
+        'repl',
+        'trace_events',
+        'domain',
+      ]);
+
+      // Get deterministic unsupported API errors
+      function _unsupportedApiError(moduleName, apiName) {
+        return new Error(moduleName + '.' + apiName + ' is not supported in sandbox');
+      }
+
+      // Create deferred module stubs that throw on API calls
+      function _createDeferredModuleStub(moduleName) {
+        const methodCache = {};
+        let stub = null;
+        stub = new Proxy({}, {
+          get(_target, prop) {
+            if (prop === '__esModule') return false;
+            if (prop === 'default') return stub;
+            if (prop === Symbol.toStringTag) return 'Module';
+            if (prop === 'then') return undefined;
+            if (typeof prop !== 'string') return undefined;
+            if (!methodCache[prop]) {
+              methodCache[prop] = function deferredApiStub() {
+                throw _unsupportedApiError(moduleName, prop);
+              };
+            }
+            return methodCache[prop];
+          },
+        });
+        return stub;
+      }
+
       globalThis.require = function require(moduleName) {
         return _requireFrom(moduleName, _currentModule.dirname);
       };
@@ -212,6 +259,19 @@ export function getRequireSetupCode(): string {
         // This prevents node-stdlib-browser's process polyfill from overwriting it.
         if (name === 'process') {
           return globalThis.process;
+        }
+
+        // Get deferred module stubs
+        if (_deferredCoreModules.has(name)) {
+          if (_moduleCache[name]) return _moduleCache[name];
+          const deferredStub = _createDeferredModuleStub(name);
+          _moduleCache[name] = deferredStub;
+          return deferredStub;
+        }
+
+        // Wait for unsupported modules to fail fast on require()
+        if (_unsupportedCoreModules.has(name)) {
+          throw new Error(name + ' is not supported in sandbox');
         }
 
         // Try to load polyfill first (for built-in modules like path, events, etc.)

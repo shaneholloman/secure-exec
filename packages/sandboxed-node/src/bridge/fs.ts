@@ -1704,6 +1704,27 @@ const fs = {
     async rm(path: string, options?: { force?: boolean; recursive?: boolean }) {
       return fs.rmSync(path, options);
     },
+    async chmod(): Promise<never> {
+      throw new Error("fs.chmod is not supported in sandbox");
+    },
+    async chown(): Promise<never> {
+      throw new Error("fs.chown is not supported in sandbox");
+    },
+    async link(): Promise<never> {
+      throw new Error("fs.link is not supported in sandbox");
+    },
+    async symlink(): Promise<never> {
+      throw new Error("fs.symlink is not supported in sandbox");
+    },
+    async readlink(): Promise<never> {
+      throw new Error("fs.readlink is not supported in sandbox");
+    },
+    async truncate(): Promise<never> {
+      throw new Error("fs.truncate is not supported in sandbox");
+    },
+    async utimes(): Promise<never> {
+      throw new Error("fs.utimes is not supported in sandbox");
+    },
   },
 
   // Compatibility methods
@@ -1798,17 +1819,45 @@ const fs = {
     return new WriteStream(pathStr, opts) as unknown as nodeFs.WriteStream;
   },
 
-  // Watch - not implemented
-  watch(): never {
-    throw new Error("fs.watch is not implemented in sandbox");
+  // Get unsupported fs APIs as deterministic errors
+  watch(..._args: unknown[]): never {
+    throw new Error("fs.watch is not supported in sandbox");
   },
 
-  watchFile(): never {
-    throw new Error("fs.watchFile is not implemented in sandbox");
+  watchFile(..._args: unknown[]): never {
+    throw new Error("fs.watchFile is not supported in sandbox");
   },
 
-  unwatchFile(): never {
-    throw new Error("fs.unwatchFile is not implemented in sandbox");
+  unwatchFile(..._args: unknown[]): never {
+    throw new Error("fs.unwatchFile is not supported in sandbox");
+  },
+
+  chmod(..._args: unknown[]): never {
+    throw new Error("fs.chmod is not supported in sandbox");
+  },
+
+  chown(..._args: unknown[]): never {
+    throw new Error("fs.chown is not supported in sandbox");
+  },
+
+  link(..._args: unknown[]): never {
+    throw new Error("fs.link is not supported in sandbox");
+  },
+
+  symlink(..._args: unknown[]): never {
+    throw new Error("fs.symlink is not supported in sandbox");
+  },
+
+  readlink(..._args: unknown[]): never {
+    throw new Error("fs.readlink is not supported in sandbox");
+  },
+
+  truncate(..._args: unknown[]): never {
+    throw new Error("fs.truncate is not supported in sandbox");
+  },
+
+  utimes(..._args: unknown[]): never {
+    throw new Error("fs.utimes is not supported in sandbox");
   },
 };
 
