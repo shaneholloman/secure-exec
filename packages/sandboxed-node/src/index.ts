@@ -83,6 +83,179 @@ export interface NodeProcessOptions {
 // Cache of bundled polyfills
 const polyfillCodeCache: Map<string, string> = new Map();
 
+const BRIDGE_MODULES = [
+	"fs",
+	"fs/promises",
+	"module",
+	"os",
+	"http",
+	"https",
+	"http2",
+	"dns",
+	"child_process",
+	"process",
+	"v8",
+] as const;
+
+const DEFERRED_CORE_MODULES = [
+	"net",
+	"tls",
+	"readline",
+	"perf_hooks",
+	"async_hooks",
+	"worker_threads",
+] as const;
+
+const UNSUPPORTED_CORE_MODULES = [
+	"dgram",
+	"cluster",
+	"wasi",
+	"diagnostics_channel",
+	"inspector",
+	"repl",
+	"trace_events",
+	"domain",
+] as const;
+
+const KNOWN_BUILTIN_MODULES = new Set([
+	...BRIDGE_MODULES,
+	...DEFERRED_CORE_MODULES,
+	...UNSUPPORTED_CORE_MODULES,
+	"assert",
+	"buffer",
+	"constants",
+	"crypto",
+	"events",
+	"path",
+	"querystring",
+	"stream",
+	"stream/web",
+	"string_decoder",
+	"timers",
+	"tty",
+	"url",
+	"util",
+	"vm",
+	"zlib",
+]);
+
+const BUILTIN_NAMED_EXPORTS: Record<string, string[]> = {
+	fs: [
+		"promises",
+		"readFileSync",
+		"writeFileSync",
+		"appendFileSync",
+		"existsSync",
+		"statSync",
+		"mkdirSync",
+		"readdirSync",
+		"createReadStream",
+		"createWriteStream",
+	],
+	"fs/promises": [
+		"readFile",
+		"writeFile",
+		"appendFile",
+		"mkdir",
+		"readdir",
+		"rm",
+		"rmdir",
+		"stat",
+	],
+	module: [
+		"createRequire",
+		"Module",
+		"isBuiltin",
+		"builtinModules",
+		"SourceMap",
+		"syncBuiltinESMExports",
+	],
+	os: [
+		"arch",
+		"platform",
+		"tmpdir",
+		"homedir",
+		"hostname",
+		"type",
+		"release",
+		"constants",
+	],
+	http: [
+		"request",
+		"get",
+		"createServer",
+		"Server",
+		"IncomingMessage",
+		"ServerResponse",
+		"Agent",
+		"METHODS",
+		"STATUS_CODES",
+	],
+	https: ["request", "get", "createServer", "Agent", "globalAgent"],
+	dns: ["lookup", "resolve", "resolve4", "resolve6", "promises"],
+	child_process: [
+		"spawn",
+		"spawnSync",
+		"exec",
+		"execSync",
+		"execFile",
+		"execFileSync",
+		"fork",
+	],
+	process: [
+		"argv",
+		"env",
+		"cwd",
+		"chdir",
+		"exit",
+		"pid",
+		"platform",
+		"version",
+		"versions",
+		"stdout",
+		"stderr",
+		"stdin",
+		"nextTick",
+	],
+	path: [
+		"sep",
+		"delimiter",
+		"basename",
+		"dirname",
+		"extname",
+		"format",
+		"isAbsolute",
+		"join",
+		"normalize",
+		"parse",
+		"relative",
+		"resolve",
+	],
+};
+
+function isValidIdentifier(value: string): boolean {
+	return /^[$A-Z_][0-9A-Z_$]*$/i.test(value);
+}
+
+function createBuiltinESMWrapper(
+	bindingExpression: string,
+	namedExports: string[],
+): string {
+	const exportLines = Array.from(new Set(namedExports))
+		.filter(isValidIdentifier)
+		.map(
+			(name) =>
+				`export const ${name} = _builtin == null ? undefined : _builtin[${JSON.stringify(name)}];`,
+		)
+		.join("\n");
+
+	return `
+      const _builtin = ${bindingExpression};
+      export default _builtin;
+      ${exportLines}
+    `;
+}
+
 export class NodeProcess {
 	private isolate: ivm.Isolate;
 	private memoryLimit: number;
@@ -99,6 +272,9 @@ export class NodeProcess {
 	private disposed: boolean = false;
 	// Cache for compiled ESM modules (per isolate)
 	private esmModuleCache: Map<string, ivm.Module> = new Map();
+	private moduleFormatCache: Map<string, "esm" | "cjs" | "json"> = new Map();
+	private packageTypeCache: Map<string, "module" | "commonjs" | null> =
+		new Map();
 
 	constructor(options: NodeProcessOptions = {}) {
 		this.memoryLimit = options.memoryLimit ?? 128;
@@ -171,32 +347,115 @@ export class NodeProcess {
 	/**
 	 * Resolve a module specifier to an absolute path
 	 */
+	private normalizeBuiltinSpecifier(request: string): string | null {
+		const moduleName = request.replace(/^node:/, "");
+		if (KNOWN_BUILTIN_MODULES.has(moduleName) || hasPolyfill(moduleName)) {
+			return request.startsWith("node:") ? `node:${moduleName}` : moduleName;
+		}
+		return null;
+	}
+
+	private getPathDir(path: string): string {
+		const normalizedPath = path.replace(/\\/g, "/");
+		const lastSlash = normalizedPath.lastIndexOf("/");
+		if (lastSlash <= 0) return "/";
+		return normalizedPath.slice(0, lastSlash);
+	}
+
+	private async getNearestPackageType(
+		filePath: string,
+	): Promise<"module" | "commonjs" | null> {
+		if (!this.filesystemEnabled || !this.filesystem) {
+			return null;
+		}
+
+		let currentDir = this.getPathDir(filePath);
+		const visitedDirs: string[] = [];
+		while (true) {
+			if (this.packageTypeCache.has(currentDir)) {
+				return this.packageTypeCache.get(currentDir) ?? null;
+			}
+			visitedDirs.push(currentDir);
+
+			const packageJsonPath =
+				currentDir === "/" ? "/package.json" : `${currentDir}/package.json`;
+
+			if (await exists(this.filesystem, packageJsonPath)) {
+				try {
+					const pkgJson = JSON.parse(
+						await this.filesystem.readTextFile(packageJsonPath),
+					) as { type?: unknown };
+					const packageType =
+						pkgJson.type === "module" || pkgJson.type === "commonjs"
+							? pkgJson.type
+							: null;
+					for (const dir of visitedDirs) {
+						this.packageTypeCache.set(dir, packageType);
+					}
+					return packageType;
+				} catch {
+					for (const dir of visitedDirs) {
+						this.packageTypeCache.set(dir, null);
+					}
+					return null;
+				}
+			}
+
+			if (currentDir === "/") {
+				for (const dir of visitedDirs) {
+					this.packageTypeCache.set(dir, null);
+				}
+				return null;
+			}
+			currentDir = this.getPathDir(currentDir);
+		}
+	}
+
+	private async getModuleFormat(
+		filePath: string,
+	): Promise<"esm" | "cjs" | "json"> {
+		const cached = this.moduleFormatCache.get(filePath);
+		if (cached) {
+			return cached;
+		}
+
+		let format: "esm" | "cjs" | "json";
+		if (filePath.endsWith(".mjs")) {
+			format = "esm";
+		} else if (filePath.endsWith(".cjs")) {
+			format = "cjs";
+		} else if (filePath.endsWith(".json")) {
+			format = "json";
+		} else if (filePath.endsWith(".js")) {
+			const packageType = await this.getNearestPackageType(filePath);
+			format = packageType === "module" ? "esm" : "cjs";
+		} else {
+			format = "cjs";
+		}
+
+		this.moduleFormatCache.set(filePath, format);
+		return format;
+	}
+
+	private async shouldRunAsESM(
+		code: string,
+		filePath?: string,
+	): Promise<boolean> {
+		// Keep heuristic mode for string-only snippets without file metadata.
+		if (!filePath) {
+			return isESM(code);
+		}
+		return (await this.getModuleFormat(filePath)) === "esm";
+	}
+
 	private async resolveESMPath(
 		specifier: string,
 		referrerPath: string,
 	): Promise<string | null> {
-		// Handle node: prefix for built-ins
-		if (specifier.startsWith("node:")) {
-			return specifier; // Keep as-is for built-in handling
-		}
-
-		// Handle bare module names that are polyfills (events, path, etc.)
-		const moduleName = specifier.replace(/^node:/, "");
-		// Special modules we provide via bridge
-		const bridgeModules = [
-			"fs",
-			"fs/promises",
-			"module",
-			"os",
-			"http",
-			"https",
-			"http2",
-			"dns",
-			"child_process",
-			"process",
-		];
-		if (hasPolyfill(moduleName) || bridgeModules.includes(moduleName)) {
-			return specifier; // Return as-is, compileESMModule will handle it
+		// Handle built-ins and bridged modules first.
+		const builtinSpecifier = this.normalizeBuiltinSpecifier(specifier);
+		if (builtinSpecifier) {
+			return builtinSpecifier;
 		}
 
 		// Handle absolute paths - return as-is
@@ -250,112 +509,80 @@ export class NodeProcess {
 		let code: string;
 
 		// Handle built-in modules (node: prefix or known polyfills)
-		const moduleName = filePath.replace(/^node:/, "");
+		const builtinSpecifier = this.normalizeBuiltinSpecifier(filePath);
+		const moduleName = (builtinSpecifier ?? filePath).replace(/^node:/, "");
 
-		// Special handling for modules we provide via bridge
-		const specialModules = [
-			"fs",
-			"fs/promises",
-			"module",
-			"os",
-			"http",
-			"https",
-			"http2",
-			"dns",
-			"child_process",
-			"process",
-		];
-		const isSpecialModule = specialModules.includes(moduleName);
-
-		if (
-			filePath.startsWith("node:") ||
-			hasPolyfill(moduleName) ||
-			isSpecialModule
-		) {
-			// Special case for fs
+		if (builtinSpecifier) {
 			if (moduleName === "fs") {
-				code = `
-          const _fs = globalThis.bridge?.fs || globalThis.bridge?.default || {};
-          export default _fs;
-        `;
+				code = createBuiltinESMWrapper(
+					"globalThis.bridge?.fs || globalThis.bridge?.default || {}",
+					BUILTIN_NAMED_EXPORTS.fs,
+				);
 			} else if (moduleName === "fs/promises") {
-				code = `
-          const _fs = globalThis.bridge?.fs || globalThis.bridge?.default || {};
-          const _promises = _fs && _fs.promises ? _fs.promises : {};
-          export default _promises;
-        `;
+				code = createBuiltinESMWrapper(
+					"(globalThis.bridge?.fs || globalThis.bridge?.default || {}).promises || {}",
+					BUILTIN_NAMED_EXPORTS["fs/promises"],
+				);
 			} else if (moduleName === "module") {
-				// Module polyfill from bridge - provides createRequire, Module class, etc.
-				code = `
-          const _modulePolyfill = globalThis.bridge?.module || {
+				code = createBuiltinESMWrapper(
+					`globalThis.bridge?.module || {
             createRequire: globalThis._createRequire || function(f) {
-              const dir = f.replace(/\\/[^\\/]*$/, '') || '/';
+              const dir = f.replace(/\\\\[^\\\\]*$/, '') || '/';
               return function(m) { return globalThis._requireFrom(m, dir); };
             },
             Module: { builtinModules: [] },
             isBuiltin: () => false,
             builtinModules: []
-          };
-          export default _modulePolyfill;
-          export const createRequire = _modulePolyfill.createRequire;
-          export const Module = _modulePolyfill.Module;
-          export const isBuiltin = _modulePolyfill.isBuiltin;
-          export const builtinModules = _modulePolyfill.builtinModules;
-          export const SourceMap = _modulePolyfill.SourceMap;
-          export const syncBuiltinESMExports = _modulePolyfill.syncBuiltinESMExports || (() => {});
-        `;
+          }`,
+					BUILTIN_NAMED_EXPORTS.module,
+				);
 			} else if (moduleName === "os") {
-				// OS polyfill from bridge
-				code = `
-          const _osPolyfill = globalThis.bridge?.os || {};
-          export default _osPolyfill;
-        `;
+				code = createBuiltinESMWrapper(
+					"globalThis.bridge?.os || {}",
+					BUILTIN_NAMED_EXPORTS.os,
+				);
 			} else if (moduleName === "http") {
-				code = `
-          const _http = globalThis._httpModule || globalThis.bridge?.network?.http || {};
-          export default _http;
-        `;
+				code = createBuiltinESMWrapper(
+					"globalThis._httpModule || globalThis.bridge?.network?.http || {}",
+					BUILTIN_NAMED_EXPORTS.http,
+				);
 			} else if (moduleName === "https") {
-				code = `
-          const _https = globalThis._httpsModule || globalThis.bridge?.network?.https || {};
-          export default _https;
-        `;
+				code = createBuiltinESMWrapper(
+					"globalThis._httpsModule || globalThis.bridge?.network?.https || {}",
+					BUILTIN_NAMED_EXPORTS.https,
+				);
 			} else if (moduleName === "http2") {
-				code = `
-          const _http2 = globalThis._http2Module || {};
-          export default _http2;
-        `;
+				code = createBuiltinESMWrapper("globalThis._http2Module || {}", []);
 			} else if (moduleName === "dns") {
-				code = `
-          const _dns = globalThis._dnsModule || globalThis.bridge?.network?.dns || {};
-          export default _dns;
-        `;
+				code = createBuiltinESMWrapper(
+					"globalThis._dnsModule || globalThis.bridge?.network?.dns || {}",
+					BUILTIN_NAMED_EXPORTS.dns,
+				);
 			} else if (moduleName === "child_process") {
-				code = `
-          const _cp = globalThis._childProcessModule || globalThis.bridge?.childProcess || {};
-          export default _cp;
-        `;
+				code = createBuiltinESMWrapper(
+					"globalThis._childProcessModule || globalThis.bridge?.childProcess || {}",
+					BUILTIN_NAMED_EXPORTS.child_process,
+				);
 			} else if (moduleName === "process") {
-				code = `
-          const _proc = globalThis.process || {};
-          export default _proc;
-        `;
-			} else {
-				// Get polyfill code and wrap for ESM
+				code = createBuiltinESMWrapper(
+					"globalThis.process || {}",
+					BUILTIN_NAMED_EXPORTS.process,
+				);
+			} else if (hasPolyfill(moduleName)) {
+				// Get polyfill code and wrap for ESM.
 				let polyfillCode = polyfillCodeCache.get(moduleName);
 				if (!polyfillCode) {
 					polyfillCode = await bundlePolyfill(moduleName);
 					polyfillCodeCache.set(moduleName, polyfillCode);
 				}
-				// Polyfills are IIFE that return the module, wrap for ESM
-				code = `
-          const _polyfillResult = ${polyfillCode};
-          export default _polyfillResult;
-          // Re-export all properties for named imports
-          const _keys = typeof _polyfillResult === 'object' && _polyfillResult !== null
-            ? Object.keys(_polyfillResult) : [];
-          export { _keys as __polyfillKeys };
-        `;
+				code = createBuiltinESMWrapper(
+					`${polyfillCode}`,
+					BUILTIN_NAMED_EXPORTS[moduleName] ?? [],
+				);
+			} else if (moduleName === "v8") {
+				code = createBuiltinESMWrapper("globalThis._moduleCache?.v8 || {}", []);
+			} else {
+				code = createBuiltinESMWrapper("{}", []);
 			}
 		} else {
 			// Load from filesystem
@@ -367,11 +594,12 @@ export class NodeProcess {
 				throw new Error(`Cannot load module: ${filePath}`);
 			}
 
-			// Handle JSON files
-			if (filePath.endsWith(".json")) {
+			// Classify source module format using extension + package metadata.
+			const moduleFormat = await this.getModuleFormat(filePath);
+			if (moduleFormat === "json") {
 				code = `export default ${source};`;
-			} else if (!isESM(source, filePath)) {
-				// CJS module - wrap it for ESM compatibility
+			} else if (moduleFormat === "cjs") {
+				// Transform CommonJS modules into ESM default exports.
 				code = wrapCJSForESM(source);
 			} else {
 				code = source;
@@ -559,58 +787,64 @@ export class NodeProcess {
 		referrerPath: string = "/",
 	): Promise<void> {
 		// Set up async module resolution/evaluation for first dynamic import.
-		const dynamicImportRef = new ivm.Reference(async (specifier: string) => {
-			const namespace = await this.resolveDynamicImportNamespace(
-				specifier,
-				context,
-				referrerPath,
-			);
-			if (!namespace) {
-				return null;
-			}
-			return namespace.derefInto();
-		});
+		const dynamicImportRef = new ivm.Reference(
+			async (specifier: string, fromPath?: string) => {
+				const effectiveReferrer =
+					typeof fromPath === "string" && fromPath.length > 0
+						? fromPath
+						: referrerPath;
+				const namespace = await this.resolveDynamicImportNamespace(
+					specifier,
+					context,
+					effectiveReferrer,
+				);
+				if (!namespace) {
+					return null;
+				}
+				return namespace.derefInto();
+			},
+		);
 
 		await jail.set("_dynamicImport", dynamicImportRef);
 
 		// Create the __dynamicImport function in the isolate
-		// First tries ESM cache, then falls back to require()
+		// Resolve in ESM mode first and only use require() fallback for explicit CJS/JSON.
 		await context.eval(`
-      globalThis.__dynamicImport = async function(specifier) {
-        const formatError = (error) => {
-          return error && typeof error.message === 'string'
-            ? error.message
-            : String(error);
-        };
+	      globalThis.__dynamicImport = async function(specifier, fromPath) {
+	        const request = String(specifier);
+	        const referrer = typeof fromPath === 'string' && fromPath.length > 0
+	          ? fromPath
+	          : ${JSON.stringify(referrerPath)};
+	        const allowRequireFallback =
+	          request.endsWith('.cjs') ||
+	          request.endsWith('.json');
 
-        let namespace;
-        try {
-          namespace = await _dynamicImport.apply(
-            undefined,
-            [specifier],
-            { result: { promise: true } }
-          );
-        } catch (error) {
-          throw new Error(
-            'Cannot dynamically import \\'' + specifier + '\\': ' + formatError(error)
-          );
-        }
+	        const namespace = await _dynamicImport.apply(
+	            undefined,
+	            [request, referrer],
+	            { result: { promise: true } }
+	          );
 
-        if (namespace !== null) {
-          return namespace;
-        }
+	        if (namespace !== null) {
+	          return namespace;
+	        }
 
-        // Fall back to require() for CommonJS modules.
-        try {
-          const mod = require(specifier);
-          return { default: mod, ...mod };
-        } catch (error) {
-          throw new Error(
-            'Cannot dynamically import \\'' + specifier + '\\': ' + formatError(error)
-          );
-        }
-      };
-    `);
+	        if (!allowRequireFallback) {
+	          throw new Error("Cannot find module '" + request + "'");
+	        }
+
+	        const mod = require(request);
+	        const namespaceFallback = { default: mod };
+	        if (mod !== null && (typeof mod === 'object' || typeof mod === 'function')) {
+	          for (const key of Object.keys(mod)) {
+	            if (!(key in namespaceFallback)) {
+	              namespaceFallback[key] = mod[key];
+	            }
+	          }
+	        }
+	        return namespaceFallback;
+	      };
+	    `);
 	}
 
 	/**
@@ -671,6 +905,10 @@ export class NodeProcess {
 		// Create a reference for resolving module paths
 		const resolveModuleRef = new ivm.Reference(
 			async (request: string, fromDir: string): Promise<string | null> => {
+				const builtinSpecifier = this.normalizeBuiltinSpecifier(request);
+				if (builtinSpecifier) {
+					return builtinSpecifier;
+				}
 				if (!this.filesystemEnabled || !this.filesystem) {
 					return null;
 				}
@@ -1203,6 +1441,8 @@ export class NodeProcess {
 		this.esmModuleCache.clear();
 		this.dynamicImportCache.clear();
 		this.dynamicImportPending.clear();
+		this.moduleFormatCache.clear();
+		this.packageTypeCache.clear();
 		this.activeHttpServerIds.clear();
 
 		const context = await this.isolate.createContext();
@@ -1220,8 +1460,8 @@ export class NodeProcess {
 			const transformedCode = transformDynamicImport(options.code);
 			const entryReferrerPath = options.filePath ?? "/";
 
-			// Detect ESM vs CJS and run the mode-specific path.
-			if (isESM(options.code, options.filePath)) {
+			// Detect ESM vs CJS using module metadata first.
+			if (await this.shouldRunAsESM(options.code, options.filePath)) {
 				await this.setupESMGlobals(context, jail);
 
 				if (options.mode === "exec") {

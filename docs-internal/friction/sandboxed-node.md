@@ -24,8 +24,11 @@
 
 6. TODO: follow up on lazy dynamic-import edge cases in ESM execution.
    - Symptom: `filePath: "/entry.mjs"` with top-level `await import("./mod.mjs")` can log pre-import output and imported-module side effects but miss post-await statements.
-   - Symptom: precompile can swallow compile failures and fall back to `require()` where ESM compile/evaluate errors should surface directly.
-   - Next step: tighten precompile error handling and add a dedicated ESM top-level-await + dynamic-import regression test.
+   - Next step: add a dedicated ESM top-level-await + dynamic-import regression test.
+
+7. **[resolved]** Dynamic import error/fallback path masked ESM failures behind CJS-style wrappers.
+   - Symptom: ESM compile/evaluation failures could be rethrown as generic dynamic-import errors, and fallback namespace construction could throw for primitive/null CommonJS exports.
+   - Fix: dynamic import now preserves original ESM failure messages, restricts require fallback to explicit `.cjs`/`.json` specifiers, and constructs safe fallback namespaces with `default` for primitive/null exports.
 
 ## 2026-02-25
 

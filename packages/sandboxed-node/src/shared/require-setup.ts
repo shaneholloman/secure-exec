@@ -172,6 +172,19 @@ export function getRequireSetupCode(): string {
         return _requireFrom(moduleName, _currentModule.dirname);
       };
 
+      function _resolveFrom(moduleName, fromDir) {
+        const resolved = _resolveModule.applySyncPromise(undefined, [moduleName, fromDir]);
+        if (resolved === null) {
+          throw new Error('Cannot find module: ' + moduleName + ' from ' + fromDir);
+        }
+        return resolved;
+      }
+
+      globalThis.require.resolve = function resolve(moduleName) {
+        return _resolveFrom(moduleName, _currentModule.dirname);
+      };
+      globalThis.require.cache = _moduleCache;
+
       function _requireFrom(moduleName, fromDir) {
         // Strip node: prefix
         const name = moduleName.replace(/^node:/, '');
@@ -296,11 +309,7 @@ export function getRequireSetupCode(): string {
         }
 
         // Resolve module path using host-side resolution
-        resolved = _resolveModule.applySyncPromise(undefined, [name, fromDir]);
-
-        if (resolved === null) {
-          throw new Error('Cannot find module: ' + moduleName + ' from ' + fromDir);
-        }
+        resolved = _resolveFrom(name, fromDir);
 
         // Use resolved path as cache key
         cacheKey = resolved;
@@ -354,28 +363,15 @@ export function getRequireSetupCode(): string {
             return _requireFrom(request, module.dirname);
           };
           moduleRequire.resolve = function(request) {
-            return _resolveModule.applySyncPromise(undefined, [request, module.dirname]);
+            return _resolveFrom(request, module.dirname);
           };
 
-          // Create a module-local __dynamicImport that resolves from this module's directory
+          // Create a module-local __dynamicImport that resolves from this module's directory.
           const moduleDynamicImport = function(specifier) {
-            // Try the ESM cache first via the global helper
-            if (typeof _dynamicImport !== 'undefined') {
-              const cached = _dynamicImport.applySync(undefined, [specifier]);
-              if (cached !== null) {
-                return Promise.resolve(cached);
-              }
+            if (typeof globalThis.__dynamicImport === 'function') {
+              return globalThis.__dynamicImport(specifier, module.dirname);
             }
-            // Fall back to require() from this module's directory
-            try {
-              const mod = _requireFrom(specifier, module.dirname);
-              // Wrap in ESM-like namespace object with default export
-              return Promise.resolve({ default: mod, ...mod });
-            } catch (e) {
-              return Promise.reject(new Error(
-                'Cannot dynamically import \\'' + specifier + '\\': ' + e.message
-              ));
-            }
+            return Promise.reject(new Error('Dynamic import is not initialized'));
           };
 
           wrapper(

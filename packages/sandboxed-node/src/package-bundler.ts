@@ -30,7 +30,7 @@ type ResolveMode = "require" | "import";
 
 interface PackageJson {
 	main?: string;
-	module?: string;
+	type?: "module" | "commonjs";
 	exports?: unknown;
 }
 
@@ -263,17 +263,11 @@ function normalizePackagePath(value: string): string {
 
 function getPackageEntryField(
 	pkgJson: PackageJson | null,
-	mode: ResolveMode,
+	_mode: ResolveMode,
 ): string | null {
 	if (!pkgJson) return "index.js";
-	if (mode === "import") {
-		if (typeof pkgJson.module === "string") return pkgJson.module;
-		if (typeof pkgJson.main === "string") return pkgJson.main;
-		return "index.js";
-	}
-
+	// Match Node's package entrypoint precedence when exports is absent.
 	if (typeof pkgJson.main === "string") return pkgJson.main;
-	if (typeof pkgJson.module === "string") return pkgJson.module;
 	return "index.js";
 }
 
@@ -378,7 +372,7 @@ export async function bundlePackage(
 	fs: VirtualFileSystem,
 ): Promise<string | null> {
 	// Resolve the package entry point
-	const entryPath = await resolveNodeModules(packageName, "/", fs);
+	const entryPath = await resolveNodeModules(packageName, "/", fs, "require");
 	if (!entryPath) {
 		return null;
 	}

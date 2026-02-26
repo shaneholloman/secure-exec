@@ -219,6 +219,112 @@ describe("NodeProcess", () => {
 		expect(esmResult.stdout).toContain("esm-entry:esm-feature");
 	});
 
+	it("treats .js entry files as ESM under package type module", async () => {
+		const fs = createFs();
+		await fs.mkdir("/app");
+		await fs.writeFile("/app/package.json", JSON.stringify({ type: "module" }));
+		await fs.writeFile("/app/value.js", "export const value = 42;");
+
+		proc = new NodeProcess({ filesystem: fs, permissions: allowAllFs });
+		const result = await proc.exec(
+			`
+	      import { value } from './value.js';
+	      console.log(value);
+	    `,
+			{ filePath: "/app/entry.js" },
+		);
+
+		expect(result.code).toBe(0);
+		expect(result.stdout).toBe("42\n");
+	});
+
+	it("uses CommonJS semantics for .js under package type commonjs", async () => {
+		const fs = createFs();
+		await fs.mkdir("/app");
+		await fs.writeFile("/app/package.json", JSON.stringify({ type: "commonjs" }));
+		await fs.writeFile("/app/value.js", "module.exports = 9;");
+
+		proc = new NodeProcess({ filesystem: fs, permissions: allowAllFs });
+		const result = await proc.run("module.exports = require('/app/value.js');", "/app/entry.js");
+		expect(result.exports).toBe(9);
+	});
+
+	it("uses Node-like main precedence for require and import when exports is absent", async () => {
+		const fs = createFs();
+		await fs.mkdir("/app");
+		await fs.mkdir("/node_modules/entry-meta");
+		await fs.writeFile(
+			"/node_modules/entry-meta/package.json",
+			JSON.stringify({
+				name: "entry-meta",
+				main: "main.cjs",
+				module: "module.mjs",
+			}),
+		);
+		await fs.writeFile(
+			"/node_modules/entry-meta/main.cjs",
+			"module.exports = { value: 'main-entry' };",
+		);
+		await fs.writeFile(
+			"/node_modules/entry-meta/module.mjs",
+			"export const value = 'module-entry';",
+		);
+
+		proc = new NodeProcess({ filesystem: fs, permissions: allowAllFs });
+
+		const requireResult = await proc.run(`
+	      const pkg = require('entry-meta');
+	      module.exports = pkg.value;
+	    `);
+		expect(requireResult.exports).toBe("main-entry");
+
+		const importResult = await proc.exec(
+			`
+	        import pkg from 'entry-meta';
+	        console.log(pkg.value);
+	      `,
+			{ filePath: "/app/entry.mjs" },
+		);
+		expect(importResult.code).toBe(0);
+		expect(importResult.stdout).toBe("main-entry\n");
+	});
+
+	it("returns builtin identifiers from require.resolve helpers", async () => {
+		proc = new NodeProcess();
+		const result = await proc.run(`
+	      const Module = require('module');
+	      module.exports = {
+	        requireResolve: require.resolve('fs'),
+	        createRequireResolve: Module.createRequire('/app/entry.js').resolve('path'),
+	      };
+	    `);
+
+		expect(result.exports).toEqual({
+			requireResolve: "fs",
+			createRequireResolve: "path",
+		});
+	});
+
+	it("supports default and named ESM imports for node:fs and node:path", async () => {
+		proc = new NodeProcess();
+		const result = await proc.exec(
+			`
+	      import fs, { readFileSync } from 'node:fs';
+	      import path, { join, sep } from 'node:path';
+	      console.log(
+	        typeof readFileSync,
+	        readFileSync === fs.readFileSync,
+	        join === path.join,
+	        sep === path.sep
+	      );
+	    `,
+			{ filePath: "/entry.mjs" },
+		);
+
+		expect(result.code).toBe(0);
+		expect(result.stdout.trim()).toBe("function true true true");
+	});
+
 	it("evaluates dynamic imports only when import() is reached", async () => {
 		const fs = createFs();
 		await fs.mkdir("/app");
@@ -325,7 +431,72 @@ describe("NodeProcess", () => {
 		);
 
 		expect(result.code).toBe(1);
-		expect(result.stderr).toContain("Cannot dynamically import './missing.mjs':");
+		expect(result.stderr).toContain("Cannot load module: /app/missing.mjs");
+	});
+
+	it("preserves ESM syntax errors from dynamic import", async () => {
+		const fs = createFs();
+		await fs.mkdir("/app");
+		await fs.writeFile("/app/broken.mjs", "export const broken = ;");
+
+		proc = new NodeProcess({ filesystem: fs, permissions: allowAllFs });
+		const result = await proc.exec(
+			`
+	      (async () => {
+	        await import('./broken.mjs');
+	      })();
+	    `,
+			{ filePath: "/app/entry.js" },
+		);
+
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("Unexpected");
+		expect(result.stderr).not.toContain("Cannot dynamically import");
+	});
+
+	it("preserves ESM evaluation errors from dynamic import", async () => {
+		const fs = createFs();
+		await fs.mkdir("/app");
+		await fs.writeFile(
+			"/app/throws.mjs",
+			"throw new Error('dynamic-import-eval-failure');",
+		);
+
+		proc = new NodeProcess({ filesystem: fs, permissions: allowAllFs });
+		const result = await proc.exec(
+			`
+	      (async () => {
+	        await import('./throws.mjs');
+	      })();
+	    `,
+			{ filePath: "/app/entry.js" },
+		);
+
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("dynamic-import-eval-failure");
+		expect(result.stderr).not.toContain("Cannot dynamically import");
+	});
+
+	it("returns safe dynamic-import namespaces for primitive and null CommonJS exports", async () => {
+		const fs = createFs();
+		await fs.mkdir("/app");
+		await fs.writeFile("/app/primitive.cjs", "module.exports = 7;");
+		await fs.writeFile("/app/nullish.cjs", "module.exports = null;");
+
+		proc = new NodeProcess({ filesystem: fs, permissions: allowAllFs });
+		const result = await proc.exec(
+			`
+	      (async () => {
+	        const primitive = await import('./primitive.cjs');
+	        const nullish = await import('./nullish.cjs');
+	        console.log(String(primitive.default) + '|' + String(nullish.default));
+	      })();
+	    `,
+			{ filePath: "/app/entry.js" },
+		);
+
+		expect(result.code).toBe(0);
+		expect(result.stdout).toBe("7|null\n");
 	});
 
 	it("serves requests through bridged http.createServer and host network fetch", async () => {

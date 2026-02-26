@@ -27,6 +27,7 @@ Deterministic unsupported API format: `"<module>.<api> is not supported in sandb
 - Bridge implementation (`src/bridge/fs.ts`)
 - Implemented: `readFile`, `writeFile`, `appendFile`, `open`, `read`, `write`, `close`, `readdir`, `mkdir`, `rmdir`, `rm`, `unlink`, `stat`, `lstat`, `rename`, `copyFile`, `exists`, `createReadStream`, `createWriteStream`, `writev`, `access`, `realpath`
 - `fs.promises` exposes async variants of implemented APIs
+- ESM support includes both default and named imports for common APIs (for example `import fs, { readFileSync } from "node:fs"`)
 - Deferred APIs with deterministic errors:
   - `fs.watch is not supported in sandbox`
   - `fs.watchFile is not supported in sandbox`
@@ -86,6 +87,7 @@ Deterministic unsupported API format: `"<module>.<api> is not supported in sandb
 
 - Bridge implementation (`src/bridge/module.ts`)
 - Implements `createRequire`, `Module` basics, and runtime builtin resolution
+- `require.resolve("fs")` and `createRequire(...).resolve("path")` return builtin identifiers instead of filesystem paths
 
 ## timers (Tier 1: Bridge)
 
@@ -95,6 +97,7 @@ Deterministic unsupported API format: `"<module>.<api> is not supported in sandb
 ## path (Tier 2: Polyfill)
 
 - Polyfill via `path-browserify`
+- ESM support includes both default and named imports for common APIs (for example `import path, { sep } from "node:path"`)
 
 ## buffer (Tier 2: Polyfill)
 
