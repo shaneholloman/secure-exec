@@ -499,6 +499,106 @@ describe("NodeProcess", () => {
 		expect(result.stdout).toBe("7|null\n");
 	});
 
+	it("uses frozen timing values by default", async () => {
+		proc = new NodeProcess();
+		const result = await proc.run(`
+      module.exports = {
+        dateFrozen: Date.now() === Date.now(),
+        perfFrozen: performance.now() === performance.now(),
+        hrtimeFrozen: process.hrtime.bigint() === process.hrtime.bigint(),
+        sharedArrayBufferType: typeof SharedArrayBuffer,
+      };
+    `);
+		expect(result.exports).toEqual({
+			dateFrozen: true,
+			perfFrozen: true,
+			hrtimeFrozen: true,
+			sharedArrayBufferType: "undefined",
+		});
+	});
+
+	it("restores advancing clocks when timing mitigation is off", async () => {
+		proc = new NodeProcess({ timingMitigation: "off" });
+		const result = await proc.exec(`
+      (async () => {
+        const dateStart = Date.now();
+        const perfStart = performance.now();
+        const hrStart = process.hrtime.bigint();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        console.log(JSON.stringify({
+          dateAdvanced: Date.now() > dateStart,
+          perfAdvanced: performance.now() > perfStart,
+          hrtimeAdvanced: process.hrtime.bigint() > hrStart,
+        }));
+      })();
+    `);
+		expect(result.code).toBe(0);
+		const metrics = JSON.parse(result.stdout.trim()) as {
+			dateAdvanced: boolean;
+			perfAdvanced: boolean;
+			hrtimeAdvanced: boolean;
+		};
+		expect(metrics.dateAdvanced).toBe(true);
+		expect(metrics.perfAdvanced).toBe(true);
+		expect(metrics.hrtimeAdvanced).toBe(true);
+	});
+
+	it("times out non-terminating CommonJS execution with cpuTimeLimitMs", async () => {
+		proc = new NodeProcess({ cpuTimeLimitMs: 100 });
+		const result = await proc.exec("while (true) {}");
+		expect(result.code).toBe(124);
+		expect(result.stderr).toContain("CPU time limit exceeded");
+	});
+
+	it("times out non-terminating ESM execution with cpuTimeLimitMs", async () => {
+		proc = new NodeProcess({ cpuTimeLimitMs: 100 });
+		const result = await proc.exec("while (true) {}", { filePath: "/entry.mjs" });
+		expect(result.code).toBe(124);
+		expect(result.stderr).toContain("CPU time limit exceeded");
+	});
+
+	it("times out non-terminating dynamic import evaluation", async () => {
+		const fs = createFs();
+		await fs.mkdir("/app");
+		await fs.writeFile("/app/loop.mjs", "while (true) {}");
+
+		proc = new NodeProcess({
+			filesystem: fs,
+			permissions: allowAllFs,
+			cpuTimeLimitMs: 100,
+		});
+		const result = await proc.exec(
+			`
+      (async () => {
+        await import("./loop.mjs");
+      })();
+    `,
+			{ filePath: "/app/entry.js" },
+		);
+		expect(result.code).toBe(124);
+		expect(result.stderr).toContain("CPU time limit exceeded");
+	});
+
+	it("enforces shared cpuTimeLimitMs deadline during active-handle wait", async () => {
+		proc = new NodeProcess({ cpuTimeLimitMs: 100 });
+		const result = await proc.run(`
+	      globalThis._waitForActiveHandles = () => new Promise(() => {});
+	      module.exports = 42;
+	    `);
+		expect(result.code).toBe(124);
+		expect(result.stderr).toContain("CPU time limit exceeded");
+	});
+
+	it("keeps isolate usable after cpuTimeLimitMs timeout", async () => {
+		proc = new NodeProcess({ cpuTimeLimitMs: 100 });
+		const timedOut = await proc.exec("while (true) {}");
+		expect(timedOut.code).toBe(124);
+
+		const recovered = await proc.run("module.exports = 7;");
+		expect(recovered.code).toBe(0);
+		expect(recovered.exports).toBe(7);
+	});
+
 	it("serves requests through bridged http.createServer and host network fetch", async () => {
 		const driver = createNodeDriver({
 			filesystem: new NodeFileSystem(),

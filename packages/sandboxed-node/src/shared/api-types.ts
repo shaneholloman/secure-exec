@@ -1,3 +1,5 @@
+export type TimingMitigation = "off" | "freeze";
+
 export interface ProcessConfig {
 	platform?: string;
 	arch?: string;
@@ -12,6 +14,10 @@ export interface ProcessConfig {
 	gid?: number;
 	/** Stdin data to provide to the script */
 	stdin?: string;
+	/** Internal execution timing policy for bridge/process polyfills */
+	timingMitigation?: TimingMitigation;
+	/** Internal frozen clock source used when timing mitigation is enabled */
+	frozenTimeMs?: number;
 }
 
 export interface OSConfig {
@@ -38,6 +44,10 @@ export interface ExecOptions {
 	cwd?: string;
 	/** Stdin data to pass to the script */
 	stdin?: string;
+	/** Maximum CPU time budget in milliseconds */
+	cpuTimeLimitMs?: number;
+	/** Timing side-channel mitigation mode */
+	timingMitigation?: TimingMitigation;
 }
 
 export interface ExecResult {

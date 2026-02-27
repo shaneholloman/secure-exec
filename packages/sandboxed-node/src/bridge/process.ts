@@ -27,6 +27,8 @@ export interface ProcessConfig {
   uid?: number;
   gid?: number;
   stdin?: string;
+  timingMitigation?: "off" | "freeze";
+  frozenTimeMs?: number;
 }
 
 // Declare config and host bridge globals
@@ -74,10 +76,27 @@ const config = {
     (typeof _processConfig !== "undefined" && _processConfig.uid) || 0,
   gid:
     (typeof _processConfig !== "undefined" && _processConfig.gid) || 0,
+  timingMitigation:
+    (typeof _processConfig !== "undefined" && _processConfig.timingMitigation) ||
+    "off",
+  frozenTimeMs:
+    typeof _processConfig !== "undefined" ? _processConfig.frozenTimeMs : undefined,
 };
 
+function getNowMs(): number {
+  if (
+    config.timingMitigation === "freeze" &&
+    typeof config.frozenTimeMs === "number"
+  ) {
+    return config.frozenTimeMs;
+  }
+  return typeof performance !== "undefined" && performance.now
+    ? performance.now()
+    : Date.now();
+}
+
 // Start time for uptime calculation
-const _processStartTime = Date.now();
+const _processStartTime = getNowMs();
 
 // Exit code tracking
 let _exitCode = 0;
@@ -343,10 +362,7 @@ const _stdin = {
 
 // hrtime function with bigint method
 function hrtime(prev?: [number, number]): [number, number] {
-  const now =
-    typeof performance !== "undefined" && performance.now
-      ? performance.now()
-      : Date.now();
+  const now = getNowMs();
   const seconds = Math.floor(now / 1000);
   const nanoseconds = Math.floor((now % 1000) * 1e6);
 
@@ -364,10 +380,7 @@ function hrtime(prev?: [number, number]): [number, number] {
 }
 
 hrtime.bigint = function (): bigint {
-  const now =
-    typeof performance !== "undefined" && performance.now
-      ? performance.now()
-      : Date.now();
+  const now = getNowMs();
   return BigInt(Math.floor(now * 1e6));
 };
 
@@ -526,7 +539,7 @@ const process: Partial<typeof nodeProcess> & {
   },
 
   uptime(): number {
-    return (Date.now() - _processStartTime) / 1000;
+    return (getNowMs() - _processStartTime) / 1000;
   },
 
   memoryUsage(): NodeJS.MemoryUsage {

@@ -74,25 +74,18 @@ libsandbox uses `isolated-vm` (also V8 isolates) and shares some of the same pri
 
 ## Security Gaps
 
-### 1. No CPU/time limits (HIGH)
+### 1. CPU/time limits (RESOLVED)
 
-A malicious `while(true){}` can lock an execution path indefinitely. `isolated-vm` supports per-call timeouts, but they must be applied consistently across all isolate entry points.
+`sandboxed-node` now enforces optional runtime CPU budgets with a shared execution deadline:
 
-**Proposed fix (concrete):**
-1. Add `cpuTimeLimitMs?: number` to `NodeProcessOptions` and `ExecOptions` (default unset for Node-like behavior; recommended secure preset: `50-100ms`).
-2. Add a per-execution budget helper that computes a deadline (`Date.now() + cpuTimeLimitMs`) and derives `remainingMs` for every isolate call.
-3. Pass `timeout: remainingMs` at all execution choke points in `packages/sandboxed-node/src/index.ts`:
+1. `cpuTimeLimitMs?: number` is supported on `NodeProcessOptions` and `ExecOptions`.
+2. Timeout budget is enforced across all relevant isolate execution points in `packages/sandboxed-node/src/index.ts`:
    - `script.run(...)` in CJS `run()` and `exec()` paths
-   - `context.eval(...)` calls that execute user-influenced code (`eval` wrapper, `module.exports`, active-handle wait, script-result await)
+   - user-influenced `context.eval(...)` calls (`module.exports`, active-handle wait, script-result await)
    - `entryModule.evaluate(...)` and dynamic `module.evaluate(...)` in ESM paths
-4. On timeout, return deterministic failure (`code: 124`, stderr includes `CPU time limit exceeded`) and immediately dispose/recreate the isolate to avoid post-timeout state reuse.
-5. Add targeted tests:
-   - CJS infinite loop trips timeout
-   - ESM infinite loop trips timeout
-   - Dynamic import with loop trips timeout
-   - `_waitForActiveHandles()` cannot run past the configured budget
-
-**Why this shape:** per-call timeout alone is not enough. A shared per-execution deadline closes gaps across `run`, `eval`, ESM evaluation, and late-phase handle draining.
+3. Exceeded budget produces deterministic failure (`code: 124`, stderr includes `CPU time limit exceeded`).
+4. Timeout path recycles the isolate before subsequent executions.
+5. Targeted runtime tests cover CJS loops, ESM loops, dynamic import loops, active-handle wait timeout, and post-timeout isolate recovery.
 
 ### 2. No OS-level sandboxing (MEDIUM-HIGH)
 
@@ -108,7 +101,7 @@ The host Node.js process has full OS access. If there is ever an isolated-vm esc
 `Date.now()` likely returns real time in isolated-vm, usable as a timing side-channel. Cloudflare freezes clocks during execution and monitors for Spectre patterns.
 
 **Proposed fix (concrete):**
-1. Add `timingMitigation?: "off" | "freeze"` to `NodeProcessOptions` (default `"off"` to preserve Node-like semantics).
+1. Add `timingMitigation?: "off" | "freeze"` to `NodeProcessOptions` (default `"freeze"` for security-first behavior).
 2. In `packages/sandboxed-node/src/index.ts`, when `timingMitigation === "freeze"`, capture execution start time and install hardened time globals before user code runs:
    - `Date.now()` returns the captured execution-start timestamp.
    - `performance.now()` returns a deterministic constant value for that execution.
@@ -118,9 +111,9 @@ The host Node.js process has full OS access. If there is ever an isolated-vm esc
    - `process.uptime()`
 4. Remove `SharedArrayBuffer` from `globalThis` in freeze mode.
 5. Add targeted tests that assert:
-   - default mode preserves advancing clocks;
-   - freeze mode produces deterministic/frozen values;
-   - `SharedArrayBuffer` is unavailable in freeze mode.
+   - default mode produces deterministic/frozen values;
+   - `timingMitigation: "off"` restores advancing clocks;
+   - `SharedArrayBuffer` is unavailable by default.
 6. Track this as OpenSpec change `openspec/changes/mitigate-timing-attacks/` (proposal/design/spec/tasks) and document intentional Node-compat deviations in friction docs.
 
 ### 4. eval() and new Function() unrestricted (MEDIUM)
@@ -143,8 +136,8 @@ In `checkPermission()`, if no permission check function is defined, the operatio
 
 ## Recommended Priority Order
 
-1. Add execution timeouts using a shared per-execution CPU budget (apply timeout to every isolate entry point)
-2. Add opt-in timing hardening profile (`timingMitigation: "freeze"`) and wire process timing helpers to frozen clocks
+1. Keep CPU timeout regression coverage and docs synchronized as execution paths evolve
+2. Add default-on timing hardening profile (`timingMitigation: "freeze"`) and wire process timing helpers to frozen clocks
 3. Document threat model explicitly -- isolated-vm is not sufficient for untrusted internet code without additional OS-level hardening
 4. Add OS-level hardening guidance (container/namespace recommendations)
 5. Add `eval()` restriction option

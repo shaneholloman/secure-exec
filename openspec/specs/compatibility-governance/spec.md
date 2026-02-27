@@ -83,3 +83,28 @@ Compatibility project-matrix policy SHALL NOT include a "known mismatch" or equi
 - **WHEN** a fixture marked pass-expected fails parity comparison
 - **THEN** the test result MUST remain failing and MUST be addressed by runtime or bridge fixes rather than fixture reclassification
 
+### Requirement: Timing Hardening Deviations Are Explicitly Documented
+Any runtime timing-hardening behavior that intentionally diverges from default Node.js timing semantics MUST be documented in compatibility/friction artifacts in the same change.
+
+#### Scenario: Hardened timing mode is introduced or changed
+- **WHEN** a change adds or modifies timing hardening behavior (for example frozen clocks or disabled timing primitives)
+- **THEN** the change MUST update `docs-internal/friction/sandboxed-node.md` with the deviation and fix/intent notes
+
+#### Scenario: Security-first default intentionally diverges from Node timing
+- **WHEN** timing hardening is enabled by default for sandbox execution
+- **THEN** the change MUST explicitly document the default-on compatibility trade-off and the supported compatibility opt-out path
+
+#### Scenario: Research and implementation guidance stays aligned
+- **WHEN** timing-side-channel mitigations are proposed or revised
+- **THEN** `docs-internal/research/comparison/cloudflare-workers-isolates.md` MUST be updated so its recommendations match the current OpenSpec change scope
+
+### Requirement: CPU Limit Compatibility and Friction Documentation Stays Aligned
+Any change that introduces or modifies the sandboxed-node CPU time limit contract MUST update compatibility/friction documentation in the same change.
+
+#### Scenario: CPU timeout contract is introduced or changed
+- **WHEN** runtime behavior for configured CPU limits changes (including option names, failure codes, or timeout stderr contract)
+- **THEN** `docs-internal/friction/sandboxed-node.md` MUST be updated with the behavior change and resolution notes
+
+#### Scenario: Research guidance reflects current CPU limit design
+- **WHEN** CPU limit implementation guidance is revised
+- **THEN** `docs-internal/research/comparison/cloudflare-workers-isolates.md` MUST be updated so recommendations match the active runtime contract and OpenSpec deltas

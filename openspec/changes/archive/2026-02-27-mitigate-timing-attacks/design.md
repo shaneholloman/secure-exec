@@ -1,16 +1,17 @@
 ## Context
 
-`sandboxed-node` currently prioritizes Node-like behavior and exposes real-time clocks (`Date.now()`, `performance.now()`, `process.hrtime()`), while runtime execution has no bounded CPU budget. The comparison research identifies this as a practical timing side-channel gap and a denial-of-service risk (`while(true){}` style loops).
+`sandboxed-node` currently exposes real-time clocks (`Date.now()`, `performance.now()`, `process.hrtime()`), while runtime execution has no bounded CPU budget. The comparison research identifies this as a practical timing side-channel gap and a denial-of-service risk (`while(true){}` style loops).
 
-The project constraint is to remain as close to Node semantics as practical, so timing hardening cannot silently change default behavior. We need an explicit, opt-in hardening path for untrusted workloads, with documentation that records intentional compatibility deviations.
+Security requirements for untrusted code execution take precedence over strict Node timing compatibility for this change. We need default-on timing hardening, with an explicit compatibility opt-out and clear documentation of intentional deviations.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Add an opt-in timing-hardening mode for untrusted execution.
+- Add timing hardening controls for untrusted execution.
+- Make timing hardening the default runtime behavior.
 - Add an execution timeout budget enforced by isolated-vm run options.
-- Keep default runtime behavior Node-compatible unless hardening is explicitly enabled.
-- Define testable behavior for both default and hardened modes.
+- Provide an explicit compatibility mode for Node-like timing behavior when required.
+- Define testable behavior for both secure-default and compatibility modes.
 
 **Non-Goals:**
 - Full Spectre-class mitigation parity with Cloudflare’s production stack (perf counters, dynamic process isolation, memory reshuffling).
@@ -25,13 +26,14 @@ Decision:
 - Introduce an opt-in configuration surface:
   - `executionTimeoutMs?: number`
   - `timingMitigation?: "off" | "freeze"`
+- Default `timingMitigation` to `"freeze"`.
 
 Rationale:
 - `executionTimeoutMs` maps directly to isolated-vm `timeout` run options.
-- `timingMitigation` keeps default behavior unchanged (`"off"`), while allowing secure deployments to opt into low-resolution timing.
+- `timingMitigation` defaults to low-resolution timing for safer out-of-the-box behavior, while `"off"` remains available for compatibility-sensitive workloads.
 
 Alternatives considered:
-- Always-on frozen clocks: rejected because it is a broad Node compatibility break.
+- Default `off` with opt-in freeze: rejected because safe operation for untrusted workloads should not depend on callers remembering extra flags.
 - Single boolean `secureMode`: rejected because future hardening controls need independent tuning.
 
 ### 2. Apply timeout consistently to user-code execution boundaries
@@ -71,8 +73,8 @@ Rationale:
 
 ## Risks / Trade-offs
 
-- Hardening mode can break apps relying on monotonic time deltas or real wall-clock progression.
-  - Mitigation: default mode remains unchanged; hardening is opt-in and documented.
+- Secure-default hardening can break apps relying on monotonic time deltas or real wall-clock progression.
+  - Mitigation: provide explicit `timingMitigation: "off"` compatibility mode and document the deviation clearly.
 - Timeout can terminate legitimate long-running workloads.
   - Mitigation: make timeout configurable and disabled unless explicitly set.
 - Partial timeout coverage could miss edge paths if new execution entry points are added later.

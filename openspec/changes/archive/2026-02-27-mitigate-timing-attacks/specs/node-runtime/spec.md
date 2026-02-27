@@ -12,16 +12,16 @@ The Node runtime MUST support a configurable execution timeout budget for sandbo
 - **THEN** the runtime MUST preserve current no-timeout behavior for execution duration control
 
 ### Requirement: Optional Timing Side-Channel Mitigation Profile
-The Node runtime MUST provide an opt-in timing mitigation mode that reduces high-resolution timing signals exposed to sandboxed code while preserving Node-like timing behavior by default.
+The Node runtime MUST provide timing mitigation controls that reduce high-resolution timing signals exposed to sandboxed code, with security-first default behavior.
 
-#### Scenario: Default timing mode remains Node-like
-- **WHEN** a caller executes code with `timingMitigation` unset or set to `"off"`
-- **THEN** `Date.now()` and `performance.now()` MUST advance with real execution time semantics
-
-#### Scenario: Hardened timing mode freezes execution clocks
-- **WHEN** a caller executes code with `timingMitigation` set to `"freeze"`
+#### Scenario: Default timing mode freezes execution clocks
+- **WHEN** a caller executes code with `timingMitigation` unset
 - **THEN** repeated reads of `Date.now()`, `performance.now()`, and `process.hrtime()` within the same execution MUST return deterministic frozen-time values
 
-#### Scenario: Hardened timing mode removes shared-memory timing primitive
-- **WHEN** a caller executes code with `timingMitigation` set to `"freeze"`
+#### Scenario: Compatibility mode restores Node-like clocks
+- **WHEN** a caller executes code with `timingMitigation` set to `"off"`
+- **THEN** `Date.now()` and `performance.now()` MUST advance with real execution time semantics
+
+#### Scenario: Default timing mode removes shared-memory timing primitive
+- **WHEN** a caller executes code with `timingMitigation` unset
 - **THEN** `SharedArrayBuffer` MUST NOT be available on `globalThis`

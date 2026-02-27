@@ -133,6 +133,8 @@ export function getBridgeWithConfig(
 		uid?: number;
 		gid?: number;
 		stdin?: string;
+		timingMitigation?: "off" | "freeze";
+		frozenTimeMs?: number;
 	},
 	osConfig?: {
 		platform?: string;

@@ -34,6 +34,7 @@ import type {
 	OSConfig,
 	ProcessConfig,
 	RunResult,
+	TimingMitigation,
 } from "./shared/api-types.js";
 
 // Re-export types
@@ -51,6 +52,7 @@ export type {
 	OSConfig,
 	ProcessConfig,
 	RunResult,
+	TimingMitigation,
 } from "./shared/api-types.js";
 export {
 	createDefaultNetworkAdapter,
@@ -71,6 +73,7 @@ export {
 
 export interface NodeProcessOptions {
 	memoryLimit?: number; // MB, default 128
+	cpuTimeLimitMs?: number; // Maximum execution time budget in milliseconds
 	driver?: SandboxDriver; // Preferred system driver
 	permissions?: Permissions; // Applied when creating default driver
 	filesystem?: VirtualFileSystem; // For accessing virtual filesystem
@@ -78,10 +81,21 @@ export interface NodeProcessOptions {
 	commandExecutor?: CommandExecutor; // For child_process support
 	networkAdapter?: NetworkAdapter; // For network support (fetch, http, https, dns)
 	osConfig?: OSConfig; // OS module configuration
+	timingMitigation?: TimingMitigation; // Timing side-channel mitigation mode
 }
 
 // Cache of bundled polyfills
 const polyfillCodeCache: Map<string, string> = new Map();
+const DEFAULT_TIMING_MITIGATION: TimingMitigation = "freeze";
+const TIMEOUT_EXIT_CODE = 124;
+const TIMEOUT_ERROR_MESSAGE = "CPU time limit exceeded";
+
+class ExecutionTimeoutError extends Error {
+	constructor() {
+		super(TIMEOUT_ERROR_MESSAGE);
+		this.name = "ExecutionTimeoutError";
+	}
+}
 
 const BRIDGE_MODULES = [
 	"fs",
@@ -265,6 +279,8 @@ export class NodeProcess {
 	private networkAdapter?: NetworkAdapter;
 	private osConfig: OSConfig;
 	private permissions?: Permissions;
+	private cpuTimeLimitMs?: number;
+	private timingMitigation: TimingMitigation;
 	private filesystemEnabled: boolean = false;
 	private commandExecutorEnabled: boolean = false;
 	private networkEnabled: boolean = false;
@@ -278,7 +294,7 @@ export class NodeProcess {
 
 	constructor(options: NodeProcessOptions = {}) {
 		this.memoryLimit = options.memoryLimit ?? 128;
-		this.isolate = new ivm.Isolate({ memoryLimit: this.memoryLimit });
+		this.isolate = this.createIsolate();
 		const driver =
 			options.driver ??
 			// Set up explicit permissions so direct adapters stay deny-by-default.
@@ -306,6 +322,9 @@ export class NodeProcess {
 		processConfig.env = filterEnv(processConfig.env, permissions);
 		this.processConfig = processConfig;
 		this.osConfig = options.osConfig ?? {};
+		this.cpuTimeLimitMs = options.cpuTimeLimitMs;
+		this.timingMitigation =
+			options.timingMitigation ?? DEFAULT_TIMING_MITIGATION;
 	}
 
 	/**
@@ -342,6 +361,141 @@ export class NodeProcess {
 	setFilesystem(filesystem: VirtualFileSystem): void {
 		this.filesystemEnabled = true;
 		this.filesystem = wrapFileSystem(filesystem, this.permissions);
+	}
+
+	private getExecutionTimeoutMs(override?: number): number | undefined {
+		const timeoutMs = override ?? this.cpuTimeLimitMs;
+		if (timeoutMs === undefined) {
+			return undefined;
+		}
+		if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+			throw new RangeError("cpuTimeLimitMs must be a positive finite number");
+		}
+		return Math.floor(timeoutMs);
+	}
+
+	private getTimingMitigation(mode?: TimingMitigation): TimingMitigation {
+		return mode ?? this.timingMitigation;
+	}
+
+	private getExecutionDeadlineMs(timeoutMs?: number): number | undefined {
+		if (timeoutMs === undefined) {
+			return undefined;
+		}
+		return Date.now() + timeoutMs;
+	}
+
+	private getExecutionRunOptions(
+		executionDeadlineMs?: number,
+	): Pick<ivm.ScriptRunOptions, "timeout"> {
+		if (executionDeadlineMs === undefined) {
+			return {};
+		}
+		const remainingMs = Math.floor(executionDeadlineMs - Date.now());
+		if (remainingMs <= 0) {
+			throw new ExecutionTimeoutError();
+		}
+		return { timeout: Math.max(1, remainingMs) };
+	}
+
+	private async runWithExecutionDeadline<T>(
+		operation: Promise<T>,
+		executionDeadlineMs?: number,
+	): Promise<T> {
+		if (executionDeadlineMs === undefined) {
+			return operation;
+		}
+		const remainingMs = Math.floor(executionDeadlineMs - Date.now());
+		if (remainingMs <= 0) {
+			throw new ExecutionTimeoutError();
+		}
+		return await new Promise<T>((resolve, reject) => {
+			const timer = setTimeout(
+				() => reject(new ExecutionTimeoutError()),
+				remainingMs,
+			);
+			operation.then(
+				(value) => {
+					clearTimeout(timer);
+					resolve(value);
+				},
+				(err) => {
+					clearTimeout(timer);
+					reject(err);
+				},
+			);
+		});
+	}
+
+	private isExecutionTimeoutError(error: unknown): boolean {
+		if (error instanceof ExecutionTimeoutError) {
+			return true;
+		}
+		const message = error instanceof Error ? error.message : String(error);
+		return /timed out|time limit exceeded/i.test(message);
+	}
+
+	private createProcessConfigForExecution(
+		timingMitigation: TimingMitigation,
+		frozenTimeMs: number,
+	): ProcessConfig {
+		return {
+			...this.processConfig,
+			timingMitigation,
+			frozenTimeMs: timingMitigation === "freeze" ? frozenTimeMs : undefined,
+		};
+	}
+
+	private async applyTimingMitigation(
+		context: ivm.Context,
+		timingMitigation: TimingMitigation,
+		frozenTimeMs: number,
+	): Promise<void> {
+		if (timingMitigation !== "freeze") {
+			await context.eval(`
+        if (typeof globalThis.performance === "undefined" || globalThis.performance === null) {
+          globalThis.performance = { now: () => Date.now() };
+        }
+      `);
+			return;
+		}
+
+		await context.eval(`
+      const __frozenTimeMs = ${JSON.stringify(frozenTimeMs)};
+      const __frozenDateNow = () => __frozenTimeMs;
+      try {
+        Object.defineProperty(Date, "now", {
+          value: __frozenDateNow,
+          configurable: true,
+          writable: true,
+        });
+      } catch {
+        Date.now = __frozenDateNow;
+      }
+
+      const __frozenPerformanceNow = () => 0;
+      if (typeof globalThis.performance !== "undefined" && globalThis.performance !== null) {
+        try {
+          Object.defineProperty(globalThis.performance, "now", {
+            value: __frozenPerformanceNow,
+            configurable: true,
+            writable: true,
+          });
+        } catch {
+          try {
+            globalThis.performance.now = __frozenPerformanceNow;
+          } catch {}
+        }
+      } else {
+        globalThis.performance = { now: __frozenPerformanceNow };
+      }
+
+      try {
+        delete globalThis.SharedArrayBuffer;
+      } catch {
+        globalThis.SharedArrayBuffer = undefined;
+      }
+    `);
 	}
 
 	/**
@@ -655,6 +809,7 @@ export class NodeProcess {
 		code: string,
 		context: ivm.Context,
 		filePath: string = "/<entry>.mjs",
+		executionDeadlineMs?: number,
 	): Promise<unknown> {
 		// Compile the entry module
 		const entryModule = await this.isolate.compileModule(code, {
@@ -666,7 +821,13 @@ export class NodeProcess {
 		await entryModule.instantiate(context, this.createESMResolver(context));
 
 		// Evaluate before reading exports so namespace bindings are initialized.
-		await entryModule.evaluate({ promise: true });
+		await this.runWithExecutionDeadline(
+			entryModule.evaluate({
+				promise: true,
+				...this.getExecutionRunOptions(executionDeadlineMs),
+			}),
+			executionDeadlineMs,
+		);
 
 		// Set namespace on the isolate global so we can serialize a plain object.
 		const jail = context.global;
@@ -677,7 +838,10 @@ export class NodeProcess {
 			// Get namespace exports for run() to mirror module.exports semantics.
 			return context.eval(
 				`Object.fromEntries(Object.entries(globalThis.${namespaceGlobalKey}))`,
-				{ copy: true },
+				{
+					copy: true,
+					...this.getExecutionRunOptions(executionDeadlineMs),
+				},
 			);
 		} finally {
 			// Clean up temporary namespace binding after copying exports.
@@ -697,6 +861,7 @@ export class NodeProcess {
 		specifier: string,
 		context: ivm.Context,
 		referrerPath: string,
+		executionDeadlineMs?: number,
 	): Promise<ivm.Reference<unknown> | null> {
 		// Get directly cached namespaces first.
 		const cached = this.dynamicImportCache.get(specifier);
@@ -733,7 +898,13 @@ export class NodeProcess {
 			} catch {
 				// Already instantiated.
 			}
-			await module.evaluate({ promise: true });
+			await this.runWithExecutionDeadline(
+				module.evaluate({
+					promise: true,
+					...this.getExecutionRunOptions(executionDeadlineMs),
+				}),
+				executionDeadlineMs,
+			);
 			return module.namespace;
 		})();
 
@@ -785,22 +956,24 @@ export class NodeProcess {
 		context: ivm.Context,
 		jail: ivm.Reference<Record<string, unknown>>,
 		referrerPath: string = "/",
+		executionDeadlineMs?: number,
 	): Promise<void> {
 		// Set up async module resolution/evaluation for first dynamic import.
-		const dynamicImportRef = new ivm.Reference(
-			async (specifier: string, fromPath?: string) => {
-				const effectiveReferrer =
-					typeof fromPath === "string" && fromPath.length > 0
-						? fromPath
-						: referrerPath;
-				const namespace = await this.resolveDynamicImportNamespace(
-					specifier,
-					context,
-					effectiveReferrer,
-				);
-				if (!namespace) {
-					return null;
-				}
+			const dynamicImportRef = new ivm.Reference(
+				async (specifier: string, fromPath?: string) => {
+					const effectiveReferrer =
+						typeof fromPath === "string" && fromPath.length > 0
+							? fromPath
+							: referrerPath;
+					const namespace = await this.resolveDynamicImportNamespace(
+						specifier,
+						context,
+						effectiveReferrer,
+						executionDeadlineMs,
+					);
+					if (!namespace) {
+						return null;
+					}
 				return namespace.derefInto();
 			},
 		);
@@ -853,6 +1026,8 @@ export class NodeProcess {
 	private async setupRequire(
 		context: ivm.Context,
 		jail: ivm.Reference<Record<string, unknown>>,
+		timingMitigation: TimingMitigation,
+		frozenTimeMs: number,
 	): Promise<void> {
 		// Create a reference that can load polyfills on demand
 		const loadPolyfillRef = new ivm.Reference(
@@ -1328,8 +1503,12 @@ export class NodeProcess {
     `);
 
 		// Load the bridge bundle which sets up all polyfill modules
-		const bridgeCode = getBridgeWithConfig(this.processConfig, this.osConfig);
+		const bridgeCode = getBridgeWithConfig(
+			this.createProcessConfigForExecution(timingMitigation, frozenTimeMs),
+			this.osConfig,
+		);
 		await context.eval(bridgeCode);
+		await this.applyTimingMitigation(context, timingMitigation, frozenTimeMs);
 
 		// Store the fs module code for use in require (avoid re-evaluating the bridge)
 		await jail.set(
@@ -1348,8 +1527,10 @@ export class NodeProcess {
 	private async setupESMGlobals(
 		context: ivm.Context,
 		jail: ivm.Reference<Record<string, unknown>>,
+		timingMitigation: TimingMitigation,
+		frozenTimeMs: number,
 	): Promise<void> {
-		await this.setupRequire(context, jail);
+		await this.setupRequire(context, jail, timingMitigation, frozenTimeMs);
 	}
 
 	/**
@@ -1417,6 +1598,8 @@ export class NodeProcess {
 			env: options?.env,
 			cwd: options?.cwd,
 			stdin: options?.stdin,
+			cpuTimeLimitMs: options?.cpuTimeLimitMs,
+			timingMitigation: options?.timingMitigation,
 		});
 
 		return {
@@ -1436,6 +1619,8 @@ export class NodeProcess {
 		env?: Record<string, string>;
 		cwd?: string;
 		stdin?: string;
+		cpuTimeLimitMs?: number;
+		timingMitigation?: TimingMitigation;
 	}): Promise<RunResult<T>> {
 		// Clear caches for fresh run
 		this.esmModuleCache.clear();
@@ -1448,6 +1633,11 @@ export class NodeProcess {
 		const context = await this.isolate.createContext();
 		const stdout: string[] = [];
 		const stderr: string[] = [];
+		const timingMitigation = this.getTimingMitigation(options.timingMitigation);
+		const frozenTimeMs = Date.now();
+		const cpuTimeLimitMs = this.getExecutionTimeoutMs(options.cpuTimeLimitMs);
+		const executionDeadlineMs = this.getExecutionDeadlineMs(cpuTimeLimitMs);
+		let recycleIsolateAfterTimeout = false;
 
 		try {
 			const jail = context.global;
@@ -1462,7 +1652,12 @@ export class NodeProcess {
 
 			// Detect ESM vs CJS using module metadata first.
 			if (await this.shouldRunAsESM(options.code, options.filePath)) {
-				await this.setupESMGlobals(context, jail);
+				await this.setupESMGlobals(
+					context,
+					jail,
+					timingMitigation,
+					frozenTimeMs,
+				);
 
 				if (options.mode === "exec") {
 					await this.applyExecutionOverrides(
@@ -1478,18 +1673,29 @@ export class NodeProcess {
 					context,
 					entryReferrerPath,
 				);
-				await this.setupDynamicImport(context, jail, entryReferrerPath);
+				await this.setupDynamicImport(
+					context,
+					jail,
+					entryReferrerPath,
+					executionDeadlineMs,
+				);
 
 				const esmResult = await this.runESM(
 					transformedCode,
 					context,
 					options.filePath,
+					executionDeadlineMs,
 				);
 				if (options.mode === "run") {
 					exports = esmResult as T;
 				}
 			} else {
-				await this.setupRequire(context, jail);
+				await this.setupRequire(
+					context,
+					jail,
+					timingMitigation,
+					frozenTimeMs,
+				);
 				await context.eval("globalThis.module = { exports: {} };");
 
 				if (options.mode === "exec") {
@@ -1510,7 +1716,12 @@ export class NodeProcess {
 					context,
 					entryReferrerPath,
 				);
-				await this.setupDynamicImport(context, jail, entryReferrerPath);
+				await this.setupDynamicImport(
+					context,
+					jail,
+					entryReferrerPath,
+					executionDeadlineMs,
+				);
 
 				if (options.mode === "exec") {
 					// Capture eval() result and await it if script returns a Promise.
@@ -1518,24 +1729,40 @@ export class NodeProcess {
             globalThis.__scriptResult__ = eval(${JSON.stringify(transformedCode)});
           `;
 					const script = await this.isolate.compileScript(wrappedCode);
-					await script.run(context);
-					await this.awaitScriptResult(context);
+					await script.run(
+						context,
+						this.getExecutionRunOptions(executionDeadlineMs),
+					);
+					await this.awaitScriptResult(context, executionDeadlineMs);
 				} else {
 					const script = await this.isolate.compileScript(transformedCode);
-					await script.run(context);
-					exports = (await context.eval("module.exports", { copy: true })) as T;
+					await script.run(
+						context,
+						this.getExecutionRunOptions(executionDeadlineMs),
+					);
+					exports = (await context.eval("module.exports", {
+						copy: true,
+						...this.getExecutionRunOptions(executionDeadlineMs),
+					})) as T;
 				}
 			}
 
 			// Wait for any active handles (child processes, etc.) to complete.
-			await context.eval(
-				'typeof _waitForActiveHandles === "function" ? _waitForActiveHandles() : Promise.resolve()',
-				{ promise: true },
+			await this.runWithExecutionDeadline(
+				context.eval(
+					'typeof _waitForActiveHandles === "function" ? _waitForActiveHandles() : Promise.resolve()',
+					{
+						promise: true,
+						...this.getExecutionRunOptions(executionDeadlineMs),
+					},
+				),
+				executionDeadlineMs,
 			);
 
 			// Get exit code from process.exitCode if set.
 			const exitCode = (await context.eval("process.exitCode || 0", {
 				copy: true,
+				...this.getExecutionRunOptions(executionDeadlineMs),
 			})) as number;
 
 			return {
@@ -1545,6 +1772,17 @@ export class NodeProcess {
 				exports,
 			};
 		} catch (err) {
+			if (this.isExecutionTimeoutError(err)) {
+				recycleIsolateAfterTimeout = true;
+				stderr.push(TIMEOUT_ERROR_MESSAGE);
+				return {
+					stdout: stdout.join("\n") + (stdout.length > 0 ? "\n" : ""),
+					stderr: stderr.join("\n") + (stderr.length > 0 ? "\n" : ""),
+					code: TIMEOUT_EXIT_CODE,
+					exports: undefined as T,
+				};
+			}
+
 			// Handle controlled process exits from process.exit(N).
 			const errMessage = err instanceof Error ? err.message : String(err);
 			const exitMatch = errMessage.match(/process\.exit\((\d+)\)/);
@@ -1568,6 +1806,9 @@ export class NodeProcess {
 			};
 		} finally {
 			context.release();
+			if (recycleIsolateAfterTimeout) {
+				this.recycleIsolate();
+			}
 		}
 	}
 
@@ -1609,13 +1850,25 @@ export class NodeProcess {
 	/**
 	 * Await script result when eval() returns a Promise.
 	 */
-	private async awaitScriptResult(context: ivm.Context): Promise<void> {
+	private async awaitScriptResult(
+		context: ivm.Context,
+		executionDeadlineMs?: number,
+	): Promise<void> {
 		const hasPromise = await context.eval(
 			`globalThis.__scriptResult__ && typeof globalThis.__scriptResult__.then === 'function'`,
-			{ copy: true },
+			{
+				copy: true,
+				...this.getExecutionRunOptions(executionDeadlineMs),
+			},
 		);
 		if (hasPromise) {
-			await context.eval(`globalThis.__scriptResult__`, { promise: true });
+			await this.runWithExecutionDeadline(
+				context.eval(`globalThis.__scriptResult__`, {
+					promise: true,
+					...this.getExecutionRunOptions(executionDeadlineMs),
+				}),
+				executionDeadlineMs,
+			);
 		}
 	}
 
@@ -1660,7 +1913,19 @@ export class NodeProcess {
 				_stdinEnded = false;
 				_stdinFlowMode = false;
 			}
-		`);
+			`);
+	}
+
+	private createIsolate(): ivm.Isolate {
+		return new ivm.Isolate({ memoryLimit: this.memoryLimit });
+	}
+
+	private recycleIsolate(): void {
+		if (this.disposed) {
+			return;
+		}
+		this.isolate.dispose();
+		this.isolate = this.createIsolate();
 	}
 
 	dispose(): void {

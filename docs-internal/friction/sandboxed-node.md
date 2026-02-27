@@ -2,9 +2,13 @@
 
 ## 2026-02-27
 
-1. TODO: runtime timing side-channel hardening is specified but not yet implemented.
+1. **[resolved]** Runtime CPU budget enforcement was not wired end-to-end.
+   - Symptom: option-level timeout helpers existed, but execution paths still risked unbounded loops or post-timeout state reuse.
+   - Fix: added/standardized `cpuTimeLimitMs` support, enforced shared execution deadlines across CJS/ESM/dynamic-import/active-handle paths, normalized timeout contract (`code: 124`, `CPU time limit exceeded`), and recycled isolate state after timeout.
+
+2. TODO: runtime timing side-channel hardening is specified but not yet implemented.
    - Symptom: sandboxed code currently observes advancing `Date.now()` / `performance.now()` and has no hardened timing profile.
-   - Next step: implement OpenSpec change `mitigate-timing-attacks` (`executionTimeoutMs` + `timingMitigation: "freeze"`) and add parity/deviation tests.
+   - Next step: implement OpenSpec change `mitigate-timing-attacks` with security-first defaults (`timingMitigation` defaults to `"freeze"` + `cpuTimeLimitMs`) and add parity/deviation tests (`"off"` compatibility mode included).
 
 ## 2026-02-26
 
