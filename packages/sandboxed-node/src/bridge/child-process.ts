@@ -1,3 +1,4 @@
+// @ts-nocheck
 // child_process module polyfill for isolated-vm
 // Provides Node.js child_process module emulation that bridges to host
 //

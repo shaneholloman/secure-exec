@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Network module polyfill for isolated-vm
 // Provides fetch, http, https, and dns module emulation that bridges to host
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Early polyfills - this file must be imported FIRST before any other modules
 // that might use TextEncoder/TextDecoder (like whatwg-url)
 

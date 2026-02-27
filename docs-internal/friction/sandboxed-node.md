@@ -38,6 +38,14 @@
    - Symptom: runtime-specific IO paths are still implemented separately, which increases duplication and behavior drift risk between Node and browser runtime surfaces.
    - Next step: define a shared IO abstraction (request/response/stream/error contracts) and migrate runtime-specific adapters to that interface with parity tests across runtimes.
 
+10. TODO: verify timer and event-rate controls for runtime abuse resistance.
+   - Symptom: control-plane limits for `setInterval`, `setImmediate`, and high-frequency event emission are not explicitly validated end-to-end, which risks starvation/DoS behavior under hostile workloads.
+   - Next step: add dedicated stress/regression coverage that asserts bounded scheduling/event throughput and deterministic failure behavior when limits are exceeded.
+
+11. TODO: remove temporary `@ts-nocheck` bypasses in bridge/browser internals.
+   - Symptom: type/build/test green status currently depends on file-level `@ts-nocheck` in bridge/browser modules, which suppresses useful type-safety guarantees.
+   - Next step: replace each bypass with concrete type fixes and keep `pnpm check-types`, `pnpm build`, and `pnpm test` passing without `@ts-nocheck`.
+
 ## 2026-02-26
 
 1. **[resolved]** Bridging `@hono/node-server` violated strict sandbox boundary policy.

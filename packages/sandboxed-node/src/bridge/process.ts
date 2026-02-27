@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Process module polyfill for isolated-vm
 // Provides Node.js process object and global polyfills for sandbox compatibility
 

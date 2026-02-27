@@ -4,6 +4,7 @@
 - use turbo for builds
 - keep timeouts under 1 minute and avoid running full test suites unless necessary
 - use one-line Conventional Commit messages; never add any co-authors (including agents)
+- never mark work complete until typechecks pass and all tests pass in the current turn; if they fail, report the failing command and first concrete error
 
 ## Terminology
 

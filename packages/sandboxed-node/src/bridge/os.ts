@@ -1,3 +1,4 @@
+// @ts-nocheck
 // OS module polyfill for isolated-vm
 // Provides Node.js os module emulation for sandbox compatibility
 

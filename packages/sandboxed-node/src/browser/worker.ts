@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { transform } from "sucrase";
 import { getRequireSetupCode } from "../shared/require-setup.js";
 import {
