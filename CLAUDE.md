@@ -5,6 +5,7 @@
 - keep timeouts under 1 minute and avoid running full test suites unless necessary
 - use one-line Conventional Commit messages; never add any co-authors (including agents)
 - never mark work complete until typechecks pass and all tests pass in the current turn; if they fail, report the failing command and first concrete error
+- always add or update tests that cover plausible exploit/abuse paths introduced by each feature or behavior change
 
 ## Terminology
 
@@ -17,6 +18,7 @@
 - any intentional deviation from Node.js behavior must be explicitly documented in OpenSpec deltas and reflected in compatibility/friction docs
 - use `openspec/specs/README.md` for how to reference baseline capabilities in new change proposals
 - track development friction in `docs-internal/friction/secure-exec.md` (mark resolved items with fix notes)
+- OpenSpec proposals/design/tasks MUST explicitly list the concrete tests to add or update for the change
 
 ## Compatibility Project-Matrix Policy
 

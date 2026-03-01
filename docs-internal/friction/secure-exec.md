@@ -1,5 +1,12 @@
 # Sandboxed Node Friction Log
 
+## 2026-02-28
+
+1. **[resolved]** Reusing host `node_modules` lacked a bounded runtime contract.
+   - Symptom: loading workspace dependencies required ad-hoc filesystem setup, and direct host filesystem use risked widening module trust boundaries.
+   - Fix: added driver `moduleAccess` projection (`cwd` + explicit `allowPackages`) that resolves dependency closure from host installs but enforces strict canonical containment under `<cwd>/node_modules`, rejects `.node` native addons, and exposes projected modules as read-only under `/app/node_modules`.
+   - Compatibility note: this path targets `node_modules` installs and intentionally fails closed on out-of-scope symlink/canonical-path resolution.
+
 ## 2026-02-27
 
 1. **[resolved]** Runtime CPU budget enforcement was not wired end-to-end.

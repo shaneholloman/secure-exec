@@ -5,3 +5,4 @@ dist
 target/
 scratch/
 .ralph/
+packages/sandboxed-node/.cache/

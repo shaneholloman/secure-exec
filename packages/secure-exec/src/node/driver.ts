@@ -9,6 +9,7 @@ import {
 	allowAll,
 	filterEnv,
 } from "../shared/permissions.js";
+import { ModuleAccessFileSystem } from "./module-access.js";
 import type {
 	CommandExecutor,
 	NetworkAdapter,
@@ -16,9 +17,11 @@ import type {
 	SandboxDriver,
 	VirtualFileSystem,
 } from "../types.js";
+import type { ModuleAccessOptions } from "./module-access.js";
 
 export interface NodeDriverOptions {
 	filesystem?: VirtualFileSystem;
+	moduleAccess?: ModuleAccessOptions;
 	networkAdapter?: NetworkAdapter;
 	commandExecutor?: CommandExecutor;
 	permissions?: Permissions;
@@ -345,8 +348,11 @@ export function createDefaultNetworkAdapter(): NetworkAdapter {
 }
 
 export function createNodeDriver(options: NodeDriverOptions = {}): SandboxDriver {
+	const filesystem = options.moduleAccess
+		? new ModuleAccessFileSystem(options.filesystem, options.moduleAccess)
+		: options.filesystem;
 	const hasAdapter =
-		Boolean(options.filesystem) ||
+		Boolean(filesystem) ||
 		Boolean(options.networkAdapter) ||
 		Boolean(options.commandExecutor) ||
 		Boolean(options.useDefaultNetwork);
@@ -359,7 +365,7 @@ export function createNodeDriver(options: NodeDriverOptions = {}): SandboxDriver
 			: undefined;
 
 	return {
-		filesystem: options.filesystem,
+		filesystem,
 		network: networkAdapter,
 		commandExecutor: options.commandExecutor,
 		permissions,
@@ -367,3 +373,4 @@ export function createNodeDriver(options: NodeDriverOptions = {}): SandboxDriver
 }
 
 export { filterEnv };
+export type { ModuleAccessOptions };

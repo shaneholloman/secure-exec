@@ -23,6 +23,7 @@ import {
 import { loadFile, resolveModule } from "./package-bundler.js";
 import { bundlePolyfill, hasPolyfill } from "./polyfills.js";
 import { createNodeDriver } from "./node/driver.js";
+import type { ModuleAccessOptions } from "./node/driver.js";
 import {
 	createCommandExecutorStub,
 	createFsStub,
@@ -84,6 +85,7 @@ export {
 	createNodeDriver,
 	NodeFileSystem,
 } from "./node/driver.js";
+export type { ModuleAccessOptions } from "./node/driver.js";
 export { createInMemoryFileSystem } from "./shared/in-memory-fs.js";
 export {
 	allowAll,
@@ -101,6 +103,7 @@ export interface NodeProcessOptions {
 	driver?: SandboxDriver; // Preferred system driver
 	permissions?: Permissions; // Applied when creating default driver
 	filesystem?: VirtualFileSystem; // For accessing virtual filesystem
+	moduleAccess?: ModuleAccessOptions; // Optional host node_modules projection policy
 	processConfig?: ProcessConfig; // Process object configuration
 	commandExecutor?: CommandExecutor; // For child_process support
 	networkAdapter?: NetworkAdapter; // For network support (fetch, http, https, dns)
@@ -161,6 +164,7 @@ export class NodeProcess {
 			// Set up explicit permissions so direct adapters stay deny-by-default.
 			createNodeDriver({
 				filesystem: options.filesystem,
+				moduleAccess: options.moduleAccess,
 				networkAdapter: options.networkAdapter,
 				commandExecutor: options.commandExecutor,
 				permissions: options.permissions ?? {},

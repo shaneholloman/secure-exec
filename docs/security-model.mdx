@@ -46,6 +46,17 @@ The host process itself is trusted infrastructure. You're responsible for harden
 
 Both boundaries matter. The isolate alone isn't enough without a hardened host, and a hardened host alone doesn't protect against code running with full API access inside your process.
 
+## Module Loading Boundary
+
+When using driver-managed module access, `secure-exec` can project selected host dependencies into sandbox paths under `/app/node_modules`.
+
+- Projection is allowlist-based: you explicitly choose root packages.
+- Resolved package artifacts are constrained to canonical paths under `<cwd>/node_modules`.
+- Projected module paths are read-only runtime state.
+- Native addons (`.node`) are rejected in this mode.
+
+This preserves a narrow runtime boundary for dependency loading while still allowing controlled reuse of host-installed `node_modules`.
+
 ## Timing Hardening
 
 By default, high-resolution timers are frozen to make timing side-channel attacks harder. You can turn this off if you need Node-compatible advancing clocks.
