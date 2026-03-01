@@ -31,6 +31,7 @@ interface PackageJson {
 	main?: string;
 	type?: "module" | "commonjs";
 	exports?: unknown;
+	imports?: unknown;
 }
 
 const FILE_EXTENSIONS = [".js", ".json", ".mjs", ".cjs"];
@@ -59,8 +60,49 @@ export async function resolveModule(
 		return resolveRelative(request, fromDir, fs, mode);
 	}
 
+	// Package import maps, e.g. "#dev"
+	if (request.startsWith("#")) {
+		return resolvePackageImports(request, fromDir, fs, mode);
+	}
+
 	// Bare imports - walk up node_modules
 	return resolveNodeModules(request, fromDir, fs, mode);
+}
+
+async function resolvePackageImports(
+	request: string,
+	fromDir: string,
+	fs: VirtualFileSystem,
+	mode: ResolveMode,
+): Promise<string | null> {
+	let dir = fromDir;
+	while (dir !== "" && dir !== ".") {
+		const pkgJsonPath = join(dir, "package.json");
+		const pkgJson = await readPackageJson(fs, pkgJsonPath);
+		if (pkgJson?.imports !== undefined) {
+			const target = resolveImportsTarget(pkgJson.imports, request, mode);
+			if (!target) {
+				return null;
+			}
+
+			if (target.startsWith("#")) {
+				// Avoid recursive import-map loops.
+				return null;
+			}
+
+			const targetPath = target.startsWith("/")
+				? target
+				: join(dir, normalizePackagePath(target));
+			return resolvePath(targetPath, fs, mode);
+		}
+
+		if (dir === "/") {
+			break;
+		}
+		dir = dirname(dir);
+	}
+
+	return null;
 }
 
 /**
@@ -343,6 +385,48 @@ function resolveConditionalTarget(
 	for (const value of Object.values(record)) {
 		const resolved = resolveExportsTarget(value, ".", mode);
 		if (resolved) return resolved;
+	}
+
+	return null;
+}
+
+function resolveImportsTarget(
+	importsField: unknown,
+	specifier: string,
+	mode: ResolveMode,
+): string | null {
+	if (typeof importsField === "string") {
+		return importsField;
+	}
+
+	if (Array.isArray(importsField)) {
+		for (const item of importsField) {
+			const resolved = resolveImportsTarget(item, specifier, mode);
+			if (resolved) {
+				return resolved;
+			}
+		}
+		return null;
+	}
+
+	if (!importsField || typeof importsField !== "object") {
+		return null;
+	}
+
+	const record = importsField as Record<string, unknown>;
+
+	if (specifier in record) {
+		return resolveExportsTarget(record[specifier], ".", mode);
+	}
+
+	for (const [key, value] of Object.entries(record)) {
+		if (!key.includes("*")) continue;
+		const [prefix, suffix] = key.split("*");
+		if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue;
+		const wildcard = specifier.slice(prefix.length, specifier.length - suffix.length);
+		const resolved = resolveExportsTarget(value, ".", mode);
+		if (!resolved) continue;
+		return resolved.replaceAll("*", wildcard);
 	}
 
 	return null;

@@ -38,11 +38,66 @@ export function extractDynamicImportSpecifiers(code: string): string[] {
  * Convert CJS module to ESM-compatible wrapper.
  */
 export function wrapCJSForESM(code: string): string {
-	return `
-    const module = { exports: {} };
-    const exports = module.exports;
-    ${code}
-    export default module.exports;
-    export const __cjsModule = true;
-  `;
+	const modulePath = "/<cjs-module>.cjs";
+	return wrapCJSForESMWithModulePath(code, modulePath);
 }
+
+function getModuleDir(path: string): string {
+	const normalized = path.replace(/\\/g, "/");
+	const lastSlash = normalized.lastIndexOf("/");
+	if (lastSlash <= 0) {
+		return "/";
+	}
+	return normalized.slice(0, lastSlash);
+}
+
+export function wrapCJSForESMWithModulePath(
+	code: string,
+	modulePath: string,
+): string {
+	const moduleDir = getModuleDir(modulePath);
+	const namedExports = extractCjsNamedExports(code)
+		.filter((name) => name !== "default" && name !== "__esModule")
+		.map((name) => {
+			const localName = `__cjs_named_${name}`;
+			return `const ${localName} = __cjs?.${name};\nexport { ${localName} as ${name} };`;
+		})
+		.join("\n");
+
+	return `
+	    const __filename = ${JSON.stringify(modulePath)};
+	    const __dirname = ${JSON.stringify(moduleDir)};
+	    const require = (name) => globalThis._requireFrom(name, __dirname);
+	    const module = { exports: {} };
+	    const exports = module.exports;
+	    ${code}
+	    const __cjs = module.exports;
+	    export default __cjs;
+	    export const __cjsModule = true;
+	    ${namedExports}
+	  `;
+}
+
+function extractCjsNamedExports(code: string): string[] {
+	const names = new Set<string>();
+	const add = (name: string) => {
+		if (!/^[A-Za-z_$][\w$]*$/.test(name)) {
+			return;
+		}
+		names.add(name);
+	};
+
+	for (const match of code.matchAll(/\bmodule\.exports\.([A-Za-z_$][\w$]*)\s*=/g)) {
+		add(match[1]);
+	}
+	for (const match of code.matchAll(/\bexports\.([A-Za-z_$][\w$]*)\s*=/g)) {
+		add(match[1]);
+	}
+	for (const match of code.matchAll(/\bObject\.defineProperty\(\s*(?:module\.)?exports\s*,\s*["']([^"']+)["']/g)) {
+		add(match[1]);
+	}
+
+	return Array.from(names).sort();
+}
+
+export { extractCjsNamedExports };

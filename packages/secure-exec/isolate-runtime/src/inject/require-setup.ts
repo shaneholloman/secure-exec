@@ -176,11 +176,11 @@
           return result;
         }
 
-        if (name === 'url') {
-          const OriginalURL = result.URL;
-          if (typeof OriginalURL !== 'function' || OriginalURL._patched) {
-            return result;
-          }
+	        if (name === 'url') {
+	          const OriginalURL = result.URL;
+	          if (typeof OriginalURL !== 'function' || OriginalURL._patched) {
+	            return result;
+	          }
 
           const PatchedURL = function PatchedURL(url, base) {
             if (
@@ -203,15 +203,41 @@
             return base !== undefined ? new OriginalURL(url, base) : new OriginalURL(url);
           };
 
-          Object.keys(OriginalURL).forEach(function(key) {
-            PatchedURL[key] = OriginalURL[key];
-          });
-          Object.setPrototypeOf(PatchedURL, OriginalURL);
-          PatchedURL.prototype = OriginalURL.prototype;
-          PatchedURL._patched = true;
-          result.URL = PatchedURL;
-          return result;
-        }
+	          Object.keys(OriginalURL).forEach(function(key) {
+	            try {
+	              PatchedURL[key] = OriginalURL[key];
+	            } catch {
+	              // Ignore read-only static properties on URL.
+	            }
+	          });
+	          Object.setPrototypeOf(PatchedURL, OriginalURL);
+	          PatchedURL.prototype = OriginalURL.prototype;
+	          PatchedURL._patched = true;
+	          const descriptor = Object.getOwnPropertyDescriptor(result, 'URL');
+	          if (
+	            descriptor &&
+	            descriptor.configurable !== true &&
+	            descriptor.writable !== true &&
+	            typeof descriptor.set !== 'function'
+	          ) {
+	            return result;
+	          }
+	          try {
+	            result.URL = PatchedURL;
+	          } catch {
+	            try {
+	              Object.defineProperty(result, 'URL', {
+	                value: PatchedURL,
+	                writable: true,
+	                configurable: true,
+	                enumerable: descriptor?.enumerable ?? true,
+	              });
+	            } catch {
+	              // Keep original URL implementation if it is not writable.
+	            }
+	          }
+	          return result;
+	        }
 
         if (name === 'path') {
           if (result.win32 === null || result.win32 === undefined) {

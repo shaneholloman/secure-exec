@@ -22,15 +22,16 @@
   "scripts": {
     "check-types:src": "tsc --noEmit",
     "check-types:isolate-runtime": "tsc -p tsconfig.isolate-runtime.json --noEmit",
-    "check-types": "pnpm run check-types:src && pnpm run check-types:isolate-runtime",
+    "check-types": "pnpm run build:generated && pnpm run check-types:src && pnpm run check-types:isolate-runtime",
     "build:bridge": "esbuild src/bridge/index.ts --bundle --format=iife --global-name=bridge --outfile=dist/bridge.js",
     "build:polyfills": "node scripts/build-polyfills.mjs",
     "build:isolate-runtime": "node scripts/build-isolate-runtime.mjs",
-    "build": "pnpm run build:bridge && pnpm run build:polyfills && pnpm run build:isolate-runtime && tsc",
-    "check-types:test": "vitest --typecheck --run tests/types/",
-    "test:project-matrix": "vitest run tests/project-matrix.test.ts",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "build:generated": "pnpm run build:polyfills && pnpm run build:isolate-runtime",
+    "build": "pnpm run build:bridge && pnpm run build:generated && tsc",
+    "check-types:test": "pnpm run build:generated && vitest --typecheck --run tests/types/",
+    "test:project-matrix": "pnpm run build:generated && vitest run tests/project-matrix.test.ts",
+    "test": "pnpm run build:generated && vitest run",
+    "test:watch": "pnpm run build:generated && vitest"
   },
   "dependencies": {
     "buffer": "^6.0.3",

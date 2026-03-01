@@ -6,3 +6,4 @@ target/
 scratch/
 .ralph/
 packages/sandboxed-node/.cache/
+packages/secure-exec/src/generated/

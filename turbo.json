@@ -4,18 +4,21 @@
     "build:bridge": {
       "outputs": ["dist/bridge.js"]
     },
+    "build:polyfills": {
+      "outputs": ["src/generated/polyfills.ts"]
+    },
     "build:isolate-runtime": {
       "outputs": ["dist/isolate-runtime/**", "src/generated/isolate-runtime.ts"]
     },
     "build": {
-      "dependsOn": ["^build", "build:bridge", "build:isolate-runtime"],
+      "dependsOn": ["^build", "build:bridge", "build:polyfills", "build:isolate-runtime"],
       "outputs": ["dist/**"]
     },
     "check-types": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build", "build:polyfills", "build:isolate-runtime"]
     },
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build", "build:polyfills", "build:isolate-runtime"]
     },
     "test:watch": {
       "cache": false,

@@ -1,10 +1,10 @@
 import ivm from "isolated-vm";
 import { randomFillSync, randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { getInitialBridgeGlobalsSetupCode } from "./bridge-setup.js";
 import { getBridgeAttachCode, getRawBridgeCode } from "./bridge-loader.js";
 import {
 	createBuiltinESMWrapper,
-	getEmptyBuiltinESMWrapper,
 	getStaticBuiltinWrapperSource,
 } from "./esm-compiler.js";
 import { executeWithRuntime } from "./execution.js";
@@ -39,10 +39,11 @@ import {
 	wrapNetworkAdapter,
 } from "./shared/permissions.js";
 import {
+	extractCjsNamedExports,
 	extractDynamicImportSpecifiers,
 	isESM,
 	transformDynamicImport,
-	wrapCJSForESM,
+	wrapCJSForESMWithModulePath,
 } from "./shared/esm-utils.js";
 import { getConsoleSetupCode } from "./shared/console-formatter.js";
 import {
@@ -131,6 +132,41 @@ export interface NodeProcessOptions {
 
 // Cache of bundled polyfills
 const polyfillCodeCache: Map<string, string> = new Map();
+const polyfillNamedExportsCache: Map<string, string[]> = new Map();
+const hostBuiltinNamedExportsCache: Map<string, string[]> = new Map();
+const hostRequire = createRequire(import.meta.url);
+
+function isValidExportName(name: string): boolean {
+	return /^[A-Za-z_$][\w$]*$/.test(name);
+}
+
+function getHostBuiltinNamedExports(moduleName: string): string[] {
+	const cached = hostBuiltinNamedExportsCache.get(moduleName);
+	if (cached) {
+		return cached;
+	}
+
+	try {
+		const loaded = hostRequire(`node:${moduleName}`) as
+			| Record<string, unknown>
+			| null
+			| undefined;
+		const names = Array.from(
+			new Set([
+				...Object.keys(loaded ?? {}),
+				...Object.getOwnPropertyNames(loaded ?? {}),
+			]),
+		)
+			.filter((name) => name !== "default")
+			.filter(isValidExportName)
+			.sort();
+		hostBuiltinNamedExportsCache.set(moduleName, names);
+		return names;
+	} catch {
+		hostBuiltinNamedExportsCache.set(moduleName, []);
+		return [];
+	}
+}
 const DEFAULT_BRIDGE_BASE64_TRANSFER_BYTES = 16 * 1024 * 1024;
 const DEFAULT_ISOLATE_JSON_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const MIN_CONFIGURED_PAYLOAD_BYTES = 1024;
@@ -499,6 +535,7 @@ export class NodeProcess {
 
 	private async getModuleFormat(
 		filePath: string,
+		sourceCode?: string,
 	): Promise<"esm" | "cjs" | "json"> {
 		const cached = this.moduleFormatCache.get(filePath);
 		if (cached) {
@@ -514,7 +551,17 @@ export class NodeProcess {
 			format = "json";
 		} else if (filePath.endsWith(".js")) {
 			const packageType = await this.getNearestPackageType(filePath);
-			format = packageType === "module" ? "esm" : "cjs";
+			if (packageType === "module") {
+				format = "esm";
+			} else if (packageType === "commonjs") {
+				format = "cjs";
+			} else if (sourceCode && isESM(sourceCode, filePath)) {
+				// Some package managers/projected filesystems omit package.json.
+				// Fall back to syntax-based detection for plain .js modules.
+				format = "esm";
+			} else {
+				format = "cjs";
+			}
 		} else {
 			format = "cjs";
 		}
@@ -549,10 +596,7 @@ export class NodeProcess {
 			return specifier;
 		}
 
-		// Get directory of referrer
-		const referrerDir = referrerPath.includes("/")
-			? referrerPath.substring(0, referrerPath.lastIndexOf("/")) || "/"
-			: "/";
+		const referrerDir = await this.resolveReferrerDirectory(referrerPath);
 
 		// Handle relative paths
 		if (specifier.startsWith("./") || specifier.startsWith("../")) {
@@ -579,6 +623,36 @@ export class NodeProcess {
 		return resolveModule(specifier, referrerDir, this.filesystem, "import");
 	}
 
+	private async resolveReferrerDirectory(referrerPath: string): Promise<string> {
+		if (referrerPath === "" || referrerPath === "/") {
+			return "/";
+		}
+
+		// Dynamic import hooks may pass either a module file path or a module
+		// directory path. Prefer filesystem metadata so we do not strip one level
+		// when the referrer is already a directory.
+		if (this.filesystemEnabled && this.filesystem) {
+			try {
+				const statInfo = await this.filesystem.stat(referrerPath);
+				if (statInfo.isDirectory) {
+					return referrerPath;
+				}
+			} catch {
+				// Fall back to string-based path handling below.
+			}
+		}
+
+		if (referrerPath.endsWith("/")) {
+			return referrerPath.slice(0, -1) || "/";
+		}
+
+		const lastSlash = referrerPath.lastIndexOf("/");
+		if (lastSlash <= 0) {
+			return "/";
+		}
+		return referrerPath.slice(0, lastSlash);
+	}
+
 	/**
 	 * Load and compile an ESM module, handling both ESM and CJS sources
 	 */
@@ -599,9 +673,21 @@ export class NodeProcess {
 		const moduleName = (builtinSpecifier ?? filePath).replace(/^node:/, "");
 
 		if (builtinSpecifier) {
+			const hostBuiltinNamedExports = getHostBuiltinNamedExports(moduleName);
+			const declaredBuiltinNamedExports = BUILTIN_NAMED_EXPORTS[moduleName] ?? [];
+			const mergedBuiltinNamedExports = Array.from(
+				new Set([...hostBuiltinNamedExports, ...declaredBuiltinNamedExports]),
+			);
+			const runtimeBuiltinBinding = `globalThis._requireFrom(${JSON.stringify(moduleName)}, "/")`;
 			const staticWrapperCode = getStaticBuiltinWrapperSource(moduleName);
 			if (staticWrapperCode !== null) {
 				code = staticWrapperCode;
+			} else if (hostBuiltinNamedExports.length > 0) {
+				// Prefer the runtime builtin bridge when host exports are known.
+				code = createBuiltinESMWrapper(
+					runtimeBuiltinBinding,
+					mergedBuiltinNamedExports,
+				);
 			} else if (hasPolyfill(moduleName)) {
 				// Get polyfill code and wrap for ESM.
 				let polyfillCode = polyfillCodeCache.get(moduleName);
@@ -609,12 +695,29 @@ export class NodeProcess {
 					polyfillCode = await bundlePolyfill(moduleName);
 					polyfillCodeCache.set(moduleName, polyfillCode);
 				}
+
+				let inferredNamedExports = polyfillNamedExportsCache.get(moduleName);
+				if (!inferredNamedExports) {
+					inferredNamedExports = extractCjsNamedExports(polyfillCode);
+					polyfillNamedExportsCache.set(moduleName, inferredNamedExports);
+				}
+
 				code = createBuiltinESMWrapper(
 					String(polyfillCode),
-					BUILTIN_NAMED_EXPORTS[moduleName] ?? [],
+					Array.from(
+						new Set([
+							...inferredNamedExports,
+							...mergedBuiltinNamedExports,
+						]),
+					),
 				);
 			} else {
-				code = getEmptyBuiltinESMWrapper();
+				// Fall back to the runtime require bridge for built-ins without
+				// dedicated polyfills so ESM named imports can still bind.
+				code = createBuiltinESMWrapper(
+					runtimeBuiltinBinding,
+					mergedBuiltinNamedExports,
+				);
 			}
 		} else {
 			// Load from filesystem
@@ -627,12 +730,12 @@ export class NodeProcess {
 			}
 
 			// Classify source module format using extension + package metadata.
-			const moduleFormat = await this.getModuleFormat(filePath);
+			const moduleFormat = await this.getModuleFormat(filePath, source);
 			if (moduleFormat === "json") {
 				code = "export default " + source + ";";
 			} else if (moduleFormat === "cjs") {
 				// Transform CommonJS modules into ESM default exports.
-				code = wrapCJSForESM(source);
+				code = wrapCJSForESMWithModulePath(source, filePath);
 			} else {
 				code = source;
 			}
@@ -769,17 +872,19 @@ export class NodeProcess {
 		}
 
 		// Evaluate once, then cache by both resolved path and original specifier.
-		const evaluateModule = (async (): Promise<ivm.Reference<unknown>> => {
-			const module = await this.compileESMModule(resolved, context);
-			try {
-				await module.instantiate(context, this.createESMResolver(context));
-			} catch {
-				// Already instantiated.
-			}
-			await this.runWithExecutionDeadline(
-				module.evaluate({
-					promise: true,
-					...this.getExecutionRunOptions(executionDeadlineMs),
+			const evaluateModule = (async (): Promise<ivm.Reference<unknown>> => {
+				const module = await this.compileESMModule(resolved, context);
+				try {
+					await module.instantiate(context, this.createESMResolver(context));
+				} catch (error) {
+					if (!this.isAlreadyInstantiatedModuleError(error)) {
+						throw error;
+					}
+				}
+				await this.runWithExecutionDeadline(
+					module.evaluate({
+						promise: true,
+						...this.getExecutionRunOptions(executionDeadlineMs),
 				}),
 				executionDeadlineMs,
 			);
@@ -796,6 +901,18 @@ export class NodeProcess {
 		} finally {
 			this.dynamicImportPending.delete(resolved);
 		}
+	}
+
+	private isAlreadyInstantiatedModuleError(error: unknown): boolean {
+		if (!(error instanceof Error)) {
+			return false;
+		}
+
+		const message = error.message.toLowerCase();
+		return (
+			message.includes("already instantiated") ||
+			message.includes("already linked")
+		);
 	}
 
 	/**
