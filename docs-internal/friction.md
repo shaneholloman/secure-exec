@@ -12,7 +12,7 @@
 
 3. **[resolved]** Default console capture buffered unbounded host memory.
    - Symptom: runtime execution accumulated console output in host-managed `stdout`/`stderr` arrays by default, enabling memory amplification under high-volume logs.
-   - Fix: runtime now drops console output by default and exposes an explicit streaming hook (`onConsoleLog`) for host-controlled log handling.
+   - Fix: runtime now drops console output by default and exposes an explicit streaming hook (`onStdio`) for host-controlled log handling.
    - Compatibility trade-off: `exec()`/`run()` no longer mirror Node stdout/stderr buffering by default; result payloads no longer expose `stdout`/`stderr` fields, so consumers that need logs must opt into hook-based streaming.
    - Migration note: switch any `result.stderr` checks to `result.errorMessage` for runtime error assertions.
 4. **[resolved]** Node module loading depended on allowlist projection setup and split filesystem paths.

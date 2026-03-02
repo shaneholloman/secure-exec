@@ -31,7 +31,7 @@ function createConsoleCapture() {
 	const events: CapturedConsoleEvent[] = [];
 	return {
 		events,
-		onConsoleLog: (event: CapturedConsoleEvent) => {
+		onStdio: (event: CapturedConsoleEvent) => {
 			events.push(event);
 		},
 		stdout: () => formatConsoleChannel(events, "stdout"),
@@ -126,7 +126,7 @@ describe("moduleAccess overlay", () => {
 			},
 		});
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ driver, onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ driver, onStdio: capture.onStdio });
 
 		const result = await proc.exec(
 			`const mod = require("allowed-root"); console.log(mod.value);`,
@@ -169,7 +169,7 @@ describe("moduleAccess overlay", () => {
 			},
 		});
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ driver, onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ driver, onStdio: capture.onStdio });
 
 		const result = await proc.exec(
 			`const mod = require("pkg-a"); console.log(mod.value);`,
@@ -200,7 +200,7 @@ describe("moduleAccess overlay", () => {
 			},
 		});
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ driver, onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ driver, onStdio: capture.onStdio });
 
 		const result = await proc.exec(
 			`
@@ -232,7 +232,7 @@ describe("moduleAccess overlay", () => {
 			},
 		});
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ driver, onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ driver, onStdio: capture.onStdio });
 
 		const result = await proc.exec(
 			`
@@ -346,7 +346,7 @@ describe("moduleAccess overlay", () => {
 					allow: !request.path.startsWith("/etc/"),
 				}),
 			},
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 
 		const result = await proc.exec(

@@ -91,7 +91,7 @@ describe("moduleAccess compatibility fixture", () => {
 			const capturedEvents: CapturedConsoleEvent[] = [];
 			proc = createTestNodeRuntime({
 				driver: sandboxDriver,
-				onConsoleLog: (event) => {
+				onStdio: (event) => {
 					capturedEvents.push(event);
 				},
 				processConfig: {

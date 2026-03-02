@@ -81,5 +81,5 @@ The bridge also enforces isolate-boundary payload limits so oversized base64 fil
 ## Logging Contract
 
 - Console output is **not buffered** into runtime-managed execution result fields by default (`exec()`/`run()` do not expose `stdout`/`stderr` result fields).
-- To consume logs, configure the optional `onConsoleLog` streaming hook and forward events to your own sink.
+- To consume logs, configure the optional `onStdio` streaming hook and forward events to your own sink.
 - This avoids implicit host-memory growth from untrusted high-volume logging.

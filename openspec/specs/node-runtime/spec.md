@@ -360,7 +360,7 @@ Runtime logging SHALL be drop-on-floor by default: if no explicit log hook is co
 - **THEN** execution MUST complete without buffered log capture and execution results MUST NOT expose buffered `stdout`/`stderr` fields
 
 ### Requirement: Runtime Exposes Optional Streaming Log Hook
-The Node runtime SHALL expose an optional host hook for streaming console log events (`stdout` and `stderr` channels) in emission order, without retaining runtime-owned history.
+The Node runtime SHALL expose an optional host hook for streaming stdio events (`stdout` and `stderr` channels) in emission order, without retaining runtime-owned history.
 
 #### Scenario: Hook receives ordered events across stdout and stderr channels
 - **WHEN** sandboxed code emits interleaved `console.log`, `console.warn`, and `console.error` calls with a configured hook

@@ -2,7 +2,7 @@ import ivm from "isolated-vm";
 import { getIsolateRuntimeSource } from "./generated/isolate-runtime.js";
 import { transformDynamicImport } from "./shared/esm-utils.js";
 import type {
-	ConsoleLogHook,
+	StdioHook,
 	RunResult,
 	TimingMitigation,
 } from "./shared/api-types.js";
@@ -32,7 +32,7 @@ type ExecuteOptions = {
 	stdin?: string;
 	cpuTimeLimitMs?: number;
 	timingMitigation?: TimingMitigation;
-	onConsoleLog?: ConsoleLogHook;
+	onStdio?: StdioHook;
 };
 
 /**
@@ -55,7 +55,7 @@ type ExecutionRuntime = {
 	setupConsole(
 		context: ivm.Context,
 		jail: ivm.Reference<Record<string, unknown>>,
-		onConsoleLog?: ConsoleLogHook,
+		onStdio?: StdioHook,
 	): Promise<void>;
 	shouldRunAsESM(code: string, filePath?: string): Promise<boolean>;
 	setupESMGlobals(
@@ -144,7 +144,7 @@ export async function executeWithRuntime<T = unknown>(
 		const jail = context.global;
 		await jail.set("global", jail.derefInto());
 
-		await runtime.setupConsole(context, jail, options.onConsoleLog);
+		await runtime.setupConsole(context, jail, options.onStdio);
 
 		let exports: T | undefined;
 		const transformedCode = transformDynamicImport(options.code);

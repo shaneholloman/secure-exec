@@ -407,7 +407,7 @@ async function runSandboxExecution(
 	const proc = createTestNodeRuntime({
 		filesystem: new NodeFileSystem(),
 		permissions: fixturePermissions,
-		onConsoleLog: (event) => {
+		onStdio: (event) => {
 			capturedEvents.push(event);
 		},
 		processConfig: {
@@ -454,7 +454,7 @@ async function runOverlaySandboxExecution(
 	const sandboxEntry = `/app/${entryRelativePath.replace(/\\/g, "/").replace(/^\/+/, "")}`;
 	const proc = createTestNodeRuntime({
 		driver,
-		onConsoleLog: (event) => {
+		onStdio: (event) => {
 			capturedEvents.push(event);
 		},
 		processConfig: {

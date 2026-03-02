@@ -36,7 +36,7 @@ The `filterEnv` function SHALL return an empty object `{}` when no `permissions.
 ### Requirement: allowAll permission helper
 The system SHALL export an `allowAll` constant of type `Permissions` where every domain checker (`fs`, `network`, `childProcess`, `env`) returns `{ allow: true }`.
 
-#### Scenario: Sandbox created with allowAll permits all operations
+#### Scenario: Runtime created with allowAll permits all operations
 - **WHEN** a `NodeRuntime` is created with `permissions: allowAll` and a filesystem adapter
 - **THEN** all filesystem operations SHALL succeed without `EACCES` errors
 

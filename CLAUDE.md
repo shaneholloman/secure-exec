@@ -15,7 +15,7 @@
 
 ## Node Architecture
 
-- read `docs-internal/arch/overview.md` for the component map (NodeProcess, SandboxDriver, NodeDriver, NodeExecutionDriver, ModuleAccessFileSystem, Permissions)
+- read `docs-internal/arch/overview.md` for the component map (NodeRuntime, RuntimeDriver, NodeDriver, NodeExecutionDriver, ModuleAccessFileSystem, Permissions)
 - keep it up to date when adding, removing, or significantly changing components
 
 ## Specs Source of Truth
@@ -26,6 +26,7 @@
 - use `openspec/specs/README.md` for how to reference baseline capabilities in new change proposals
 - track development friction in `docs-internal/friction.md` (mark resolved items with fix notes)
 - OpenSpec proposals/design/tasks MUST explicitly list the concrete tests to add or update for the change
+- when a request is scoped as `opsx` (propose/plan/apply/archive), always use OpenSpec workflow end-to-end (`opsx propose` -> `opsx apply`) before implementation; do not apply code changes outside an active OpenSpec change
 
 ## Compatibility Project-Matrix Policy
 

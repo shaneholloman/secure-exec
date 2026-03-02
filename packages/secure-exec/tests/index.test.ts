@@ -43,7 +43,7 @@ function createConsoleCapture() {
 	const events: CapturedConsoleEvent[] = [];
 	return {
 		events,
-		onConsoleLog: (event: CapturedConsoleEvent) => {
+		onStdio: (event: CapturedConsoleEvent) => {
 			events.push(event);
 		},
 		stdout: () => formatConsoleChannel(events, "stdout"),
@@ -105,7 +105,7 @@ describe("NodeRuntime", () => {
 
 	it("streams ordered stdout/stderr hook events", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(`
       console.log("first");
       console.warn("second");
@@ -126,7 +126,7 @@ describe("NodeRuntime", () => {
 	it("continues execution when the host log hook throws", async () => {
 		const seen: CapturedConsoleEvent[] = [];
 		proc = createTestNodeRuntime({
-			onConsoleLog: (event) => {
+			onStdio: (event) => {
 				seen.push(event);
 				throw new Error("hook-failure");
 			},
@@ -140,7 +140,7 @@ describe("NodeRuntime", () => {
 
 	it("logs circular objects to hook without throwing", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(`
       const value = { name: 'root' };
       value.self = value;
@@ -153,7 +153,7 @@ describe("NodeRuntime", () => {
 
 	it("logs null and undefined values to hook", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(`console.log(null, undefined);`);
 		expect(result.code).toBe(0);
 		expect(result).not.toHaveProperty("stdout");
@@ -162,7 +162,7 @@ describe("NodeRuntime", () => {
 
 	it("logs circular objects to stderr hook without throwing", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(`
       const value = { name: 'root' };
       value.self = value;
@@ -175,7 +175,7 @@ describe("NodeRuntime", () => {
 
 	it("bounds deep and large console payloads in hook mode", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(`
 	      const deep = { level: 0 };
 	      let cursor = deep;
@@ -224,7 +224,7 @@ describe("NodeRuntime", () => {
 
 	it("provides host-backed crypto randomness APIs", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(`
 	      const bytes = new Uint8Array(16);
 	      crypto.getRandomValues(bytes);
@@ -239,7 +239,7 @@ describe("NodeRuntime", () => {
 
 	it("prevents sandbox override of host entropy bridge hooks", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(`
 		      const originalFill = globalThis._cryptoRandomFill;
 		      const originalUuid = globalThis._cryptoRandomUUID;
@@ -335,7 +335,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.run(`
       const pkg = require('my-pkg');
@@ -353,7 +353,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.run(`
       const fs = require('fs');
@@ -372,7 +372,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.run(`
       const fs = require('fs');
@@ -397,7 +397,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.run(`
       const fs = require('fs');
@@ -463,7 +463,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 
 		const cjsResult = await proc.run(`
@@ -496,7 +496,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(
 			`
@@ -547,7 +547,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 
 		const requireResult = await proc.run(`
@@ -586,7 +586,7 @@ describe("NodeRuntime", () => {
 
 	it("supports default and named ESM imports for node:fs and node:path", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(
 			`
 	      import fs, { readFileSync } from 'node:fs';
@@ -621,7 +621,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(
 			`
@@ -654,7 +654,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(
 			`
@@ -689,7 +689,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(
 			`
@@ -723,7 +723,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(
 			`
@@ -747,7 +747,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(
 			`
@@ -796,7 +796,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(
 			`
@@ -836,7 +836,7 @@ describe("NodeRuntime", () => {
 		const capture = createConsoleCapture();
 		proc = createTestNodeRuntime({
 			timingMitigation: "off",
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(`
       (async () => {
@@ -900,7 +900,7 @@ describe("NodeRuntime", () => {
 
 	it("hardens all custom globals as non-writable and non-configurable", async () => {
 		const capture = createConsoleCapture();
-		proc = createTestNodeRuntime({ onConsoleLog: capture.onConsoleLog });
+		proc = createTestNodeRuntime({ onStdio: capture.onStdio });
 		const result = await proc.exec(`
 		      const targets = ${JSON.stringify(HARDENED_NODE_CUSTOM_GLOBALS)};
 		      const failures = [];
@@ -944,7 +944,7 @@ describe("NodeRuntime", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(
 			`

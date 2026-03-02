@@ -5,7 +5,7 @@ import type {
 	RuntimeDriver,
 } from "./types.js";
 import type {
-	ConsoleLogHook,
+	StdioHook,
 	ExecOptions,
 	ExecResult,
 	RunResult,
@@ -22,9 +22,9 @@ export type {
 } from "./types.js";
 export type { DirEntry, StatInfo } from "./fs-helpers.js";
 export type {
-	ConsoleLogChannel,
-	ConsoleLogEvent,
-	ConsoleLogHook,
+	StdioChannel,
+	StdioEvent,
+	StdioHook,
 	ExecOptions,
 	ExecResult,
 	OSConfig,
@@ -57,7 +57,7 @@ export interface NodeRuntimeOptions {
 	memoryLimit?: number;
 	cpuTimeLimitMs?: number;
 	timingMitigation?: TimingMitigation;
-	onConsoleLog?: ConsoleLogHook;
+	onStdio?: StdioHook;
 	payloadLimits?: {
 		base64TransferBytes?: number;
 		jsonPayloadBytes?: number;
@@ -104,7 +104,7 @@ export class NodeRuntime {
 			memoryLimit: options.memoryLimit,
 			cpuTimeLimitMs: options.cpuTimeLimitMs,
 			timingMitigation: options.timingMitigation,
-			onConsoleLog: options.onConsoleLog,
+			onStdio: options.onStdio,
 			payloadLimits: options.payloadLimits,
 		}) as UnsafeRuntimeExecutionDriver;
 	}

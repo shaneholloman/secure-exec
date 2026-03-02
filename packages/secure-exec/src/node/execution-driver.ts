@@ -63,8 +63,8 @@ import type {
 	VirtualFileSystem,
 } from "../types.js";
 import type {
-	ConsoleLogEvent,
-	ConsoleLogHook,
+	StdioEvent,
+	StdioHook,
 	ExecOptions,
 	ExecResult,
 	OSConfig,
@@ -143,7 +143,7 @@ export class NodeExecutionDriver implements RuntimeExecutionDriver {
 	private timingMitigation: TimingMitigation;
 	private bridgeBase64TransferLimitBytes: number;
 	private isolateJsonPayloadLimitBytes: number;
-	private onConsoleLog?: ConsoleLogHook;
+	private onStdio?: StdioHook;
 	private runtimeCreateIsolate: (memoryLimit: number) => ivm.Isolate;
 	private activeHttpServerIds: Set<number> = new Set();
 	private disposed: boolean = false;
@@ -188,7 +188,7 @@ export class NodeExecutionDriver implements RuntimeExecutionDriver {
 		this.cpuTimeLimitMs = options.cpuTimeLimitMs;
 		this.timingMitigation =
 			options.timingMitigation ?? DEFAULT_TIMING_MITIGATION;
-		this.onConsoleLog = options.onConsoleLog;
+		this.onStdio = options.onStdio;
 		this.bridgeBase64TransferLimitBytes = this.normalizePayloadLimit(
 			options.payloadLimits?.base64TransferBytes,
 			DEFAULT_BRIDGE_BASE64_TRANSFER_BYTES,
@@ -255,7 +255,7 @@ export class NodeExecutionDriver implements RuntimeExecutionDriver {
 		const timingMitigation = this.getTimingMitigation(undefined);
 		const frozenTimeMs = Date.now();
 
-		await this.setupConsole(context, jail, this.onConsoleLog);
+		await this.setupConsole(context, jail, this.onStdio);
 		await this.setupRequire(context, jail, timingMitigation, frozenTimeMs);
 		await this.setupDynamicImport(
 			context,
@@ -1455,14 +1455,14 @@ export class NodeExecutionDriver implements RuntimeExecutionDriver {
 	}
 
 	private emitConsoleEvent(
-		onConsoleLog: ConsoleLogHook | undefined,
-		event: ConsoleLogEvent,
+		onStdio: StdioHook | undefined,
+		event: StdioEvent,
 	): void {
-		if (!onConsoleLog) {
+		if (!onStdio) {
 			return;
 		}
 		try {
-			onConsoleLog(event);
+			onStdio(event);
 		} catch {
 			// Keep runtime execution deterministic even when host hooks fail.
 		}
@@ -1474,16 +1474,16 @@ export class NodeExecutionDriver implements RuntimeExecutionDriver {
 	private async setupConsole(
 		context: ivm.Context,
 		jail: ivm.Reference<Record<string, unknown>>,
-		onConsoleLog?: ConsoleLogHook,
+		onStdio?: StdioHook,
 	): Promise<void> {
 		const logRef = new ivm.Reference((msg: string) => {
-			this.emitConsoleEvent(onConsoleLog, {
+			this.emitConsoleEvent(onStdio, {
 				channel: "stdout",
 				message: String(msg),
 			});
 		});
 		const errorRef = new ivm.Reference((msg: string) => {
-			this.emitConsoleEvent(onConsoleLog, {
+			this.emitConsoleEvent(onStdio, {
 				channel: "stderr",
 				message: String(msg),
 			});
@@ -1509,7 +1509,7 @@ export class NodeExecutionDriver implements RuntimeExecutionDriver {
 			stdin: options?.stdin,
 			cpuTimeLimitMs: options?.cpuTimeLimitMs,
 			timingMitigation: options?.timingMitigation,
-			onConsoleLog: options?.onConsoleLog,
+			onStdio: options?.onStdio,
 		});
 
 		return {
@@ -1530,7 +1530,7 @@ export class NodeExecutionDriver implements RuntimeExecutionDriver {
 		stdin?: string;
 		cpuTimeLimitMs?: number;
 		timingMitigation?: TimingMitigation;
-		onConsoleLog?: ConsoleLogHook;
+		onStdio?: StdioHook;
 	}): Promise<RunResult<T>> {
 		return executeWithRuntime<T>(
 			{
@@ -1546,11 +1546,11 @@ export class NodeExecutionDriver implements RuntimeExecutionDriver {
 					this.getExecutionTimeoutMs(override),
 				getExecutionDeadlineMs: (timeoutMs) =>
 					this.getExecutionDeadlineMs(timeoutMs),
-				setupConsole: (context, jail, onConsoleLog) =>
+				setupConsole: (context, jail, onStdio) =>
 					this.setupConsole(
 						context,
 						jail,
-						onConsoleLog ?? this.onConsoleLog,
+						onStdio ?? this.onStdio,
 					),
 				shouldRunAsESM: (code, filePath) => this.shouldRunAsESM(code, filePath),
 				setupESMGlobals: (context, jail, timingMitigation, frozenTimeMs) =>

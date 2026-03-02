@@ -31,7 +31,7 @@ function formatConsoleChannel(
 function createConsoleCapture() {
 	const events: CapturedConsoleEvent[] = [];
 	return {
-		onConsoleLog: (event: CapturedConsoleEvent) => {
+		onStdio: (event: CapturedConsoleEvent) => {
 			events.push(event);
 		},
 		stdout: () => formatConsoleChannel(events, "stdout"),
@@ -88,7 +88,7 @@ describe("NodeRuntime payload limits", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(`
       const fs = require('fs');
@@ -148,7 +148,7 @@ describe("NodeRuntime payload limits", () => {
 		proc = createTestNodeRuntime({
 			networkAdapter: createEchoNetworkAdapter(),
 			permissions: allowAllNetwork,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 		});
 		const result = await proc.exec(`
       (async () => {
@@ -196,7 +196,7 @@ describe("NodeRuntime payload limits", () => {
 		proc = createTestNodeRuntime({
 			filesystem: fs,
 			permissions: allowAllFs,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 			payloadLimits: {
 				base64TransferBytes: DEFAULT_BRIDGE_BASE64_TRANSFER_BYTES + 4096,
 			},
@@ -219,7 +219,7 @@ describe("NodeRuntime payload limits", () => {
 		proc = createTestNodeRuntime({
 			networkAdapter: createEchoNetworkAdapter(),
 			permissions: allowAllNetwork,
-			onConsoleLog: capture.onConsoleLog,
+			onStdio: capture.onStdio,
 			payloadLimits: {
 				jsonPayloadBytes: DEFAULT_ISOLATE_JSON_PAYLOAD_BYTES + 4096,
 			},

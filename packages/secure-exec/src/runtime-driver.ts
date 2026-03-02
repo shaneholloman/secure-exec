@@ -1,5 +1,5 @@
 import type {
-	ConsoleLogHook,
+	StdioHook,
 	ExecOptions,
 	ExecResult,
 	OSConfig,
@@ -25,7 +25,7 @@ export interface RuntimeExecutionDriverOptions {
 	memoryLimit?: number;
 	cpuTimeLimitMs?: number;
 	timingMitigation?: TimingMitigation;
-	onConsoleLog?: ConsoleLogHook;
+	onStdio?: StdioHook;
 	payloadLimits?: {
 		base64TransferBytes?: number;
 		jsonPayloadBytes?: number;

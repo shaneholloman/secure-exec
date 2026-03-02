@@ -11,12 +11,12 @@ description: Get secure-exec running from TypeScript in a few minutes.
   </Step>
   <Step title="Execute code">
     ```ts
-    import { NodeProcess, createNodeDriver } from "secure-exec";
+    import { NodeRuntime, createNodeDriver } from "secure-exec";
 
-    const proc = new NodeProcess({ driver: createNodeDriver({}) });
+    const proc = new NodeRuntime({ driver: createNodeDriver({}) });
     const logs: string[] = [];
     const result = await proc.exec("console.log('hello from secure-exec')", {
-      onConsoleLog: (event) => {
+      onStdio: (event) => {
         logs.push(`[${event.channel}] ${event.message}`);
       },
     });

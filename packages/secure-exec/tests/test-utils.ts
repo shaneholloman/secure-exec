@@ -12,7 +12,7 @@ import type {
 	VirtualFileSystem,
 } from "../src/types.js";
 import type {
-	ConsoleLogHook,
+	StdioHook,
 	OSConfig,
 	ProcessConfig,
 	TimingMitigation,
@@ -35,7 +35,7 @@ export type LegacyNodeRuntimeOptions = {
 	memoryLimit?: number;
 	cpuTimeLimitMs?: number;
 	timingMitigation?: TimingMitigation;
-	onConsoleLog?: ConsoleLogHook;
+	onStdio?: StdioHook;
 	payloadLimits?: {
 		base64TransferBytes?: number;
 		jsonPayloadBytes?: number;
