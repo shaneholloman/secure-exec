@@ -1,0 +1,19 @@
+{
+  "name": "@libsandbox/playground",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm run setup-vendor && pnpm run build:assets",
+    "build:assets": "tsx ./scripts/build-worker.ts",
+    "check": "pnpm run build:assets",
+    "check-types": "tsc --noEmit -p ./tsconfig.json",
+    "dev": "pnpm run setup-vendor && pnpm run build:assets && tsx ./backend/server.ts",
+    "setup-vendor": "tsx ./scripts/setup-vendor.ts",
+    "test": "pnpm exec vitest run ./tests/"
+  },
+  "devDependencies": {
+    "monaco-editor": "0.52.2",
+    "pyodide": "0.28.3",
+    "typescript": "5.9.3"
+  }
+}

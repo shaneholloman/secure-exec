@@ -105,10 +105,10 @@ function revivePermissions(serialized?: SerializedPermissions): Permissions | un
 function makeApplySync<TArgs extends unknown[], TResult>(
 	fn: (...args: TArgs) => TResult,
 ) {
+	const applySync = (_ctx: undefined, args: TArgs): TResult => fn(...args);
 	return {
-		applySync(_ctx: undefined, args: TArgs): TResult {
-			return fn(...args);
-		},
+		applySync,
+		applySyncPromise: applySync,
 	};
 }
 
@@ -264,14 +264,14 @@ async function initRuntime(payload: BrowserWorkerInitPayload): Promise<void> {
 	const readFileRef = makeApplySyncPromise(async (path: string) => {
 		return fsOps.readTextFile(path);
 	});
-	const writeFileRef = makeApplySync(async (path: string, content: string) => {
+	const writeFileRef = makeApplySyncPromise(async (path: string, content: string) => {
 		return fsOps.writeFile(path, content);
 	});
 	const readFileBinaryRef = makeApplySyncPromise(async (path: string) => {
 		const data = await fsOps.readFile(path);
 		return btoa(String.fromCharCode(...data));
 	});
-	const writeFileBinaryRef = makeApplySync(async (path: string, base64: string) => {
+	const writeFileBinaryRef = makeApplySyncPromise(async (path: string, base64: string) => {
 		const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 		return fsOps.writeFile(path, bytes);
 	});
@@ -279,7 +279,7 @@ async function initRuntime(payload: BrowserWorkerInitPayload): Promise<void> {
 		const entries = await fsOps.readDirWithTypes(path);
 		return JSON.stringify(entries);
 	});
-	const mkdirRef = makeApplySync(async (path: string) => {
+	const mkdirRef = makeApplySyncPromise(async (path: string) => {
 		return mkdir(fsOps, path);
 	});
 	const rmdirRef = makeApplySyncPromise(async (path: string) => {
@@ -493,7 +493,7 @@ function resetModuleState(cwd: string): void {
 }
 
 function setDynamicImportFallback(): void {
-	exposeCustomGlobal("__dynamicImport", function (specifier: string) {
+	exposeMutableRuntimeStateGlobal("__dynamicImport", function (specifier: string) {
 		const cached = dynamicImportCache.get(specifier);
 		if (cached) return Promise.resolve(cached);
 		try {
@@ -612,7 +612,12 @@ async function execScript(
 			});
 		}
 
-		eval(transformed);
+		// Await the eval result so async IIFEs / top-level promise expressions
+		// resolve before we check for active handles.
+		const evalResult = eval(transformed);
+		if (evalResult && typeof evalResult === "object" && typeof (evalResult as Record<string,unknown>).then === "function") {
+			await evalResult;
+		}
 
 		const waitForActiveHandles = (globalThis as Record<string, unknown>)
 			._waitForActiveHandles as (() => Promise<void>) | undefined;

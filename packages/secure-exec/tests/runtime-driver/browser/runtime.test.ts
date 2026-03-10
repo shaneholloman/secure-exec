@@ -88,6 +88,22 @@ describe.skipIf(!IS_BROWSER_ENV)("runtime driver specific: browser", () => {
 		});
 	});
 
+	it("supports repeated exec calls on the same browser runtime", async () => {
+		const runtime = await createRuntime();
+		const first = await runtime.exec(`
+      globalThis.__browserCounter = (globalThis.__browserCounter ?? 0) + 1;
+      console.log("browser-counter:" + globalThis.__browserCounter);
+    `);
+		const second = await runtime.exec(`
+      globalThis.__browserCounter = (globalThis.__browserCounter ?? 0) + 1;
+      console.log("browser-counter:" + globalThis.__browserCounter);
+    `);
+
+		expect(first.code).toBe(0);
+		expect(second.code).toBe(0);
+		expect(second.errorMessage).toBeUndefined();
+	});
+
 	it("keeps HTTP2 server APIs unsupported in browser runtime", async () => {
 		const runtime = await createRuntime();
 		const result = await runtime.exec(`

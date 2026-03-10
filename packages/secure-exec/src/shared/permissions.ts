@@ -31,24 +31,22 @@ function checkPermission<T>(
 	}
 }
 
-function allowPermission() {
-	return { allow: true } as const;
-}
-
+// Permission callbacks must be self-contained (no closures) because they are
+// serialized via `.toString()` for transfer to the browser Web Worker.
 export const allowAllFs: Pick<Permissions, "fs"> = {
-	fs: () => allowPermission(),
+	fs: () => ({ allow: true }),
 };
 
 export const allowAllNetwork: Pick<Permissions, "network"> = {
-	network: () => allowPermission(),
+	network: () => ({ allow: true }),
 };
 
 export const allowAllChildProcess: Pick<Permissions, "childProcess"> = {
-	childProcess: () => allowPermission(),
+	childProcess: () => ({ allow: true }),
 };
 
 export const allowAllEnv: Pick<Permissions, "env"> = {
-	env: () => allowPermission(),
+	env: () => ({ allow: true }),
 };
 
 export const allowAll: Permissions = {

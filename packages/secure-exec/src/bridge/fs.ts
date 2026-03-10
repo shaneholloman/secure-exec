@@ -863,15 +863,16 @@ const fs = {
 
     if (typeof data === "string") {
       // Text mode - use text write
-      _fs.writeFile.applySyncPromise(undefined, [pathStr, data]);
+      // Return the result so async callers (fs.promises) can await it.
+      return _fs.writeFile.applySyncPromise(undefined, [pathStr, data]);
     } else if (ArrayBuffer.isView(data)) {
       // Binary mode - convert to base64 and use binary write
       const uint8 = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
       const base64 = Buffer.from(uint8).toString("base64");
-      _fs.writeFileBinary.applySyncPromise(undefined, [pathStr, base64]);
+      return _fs.writeFileBinary.applySyncPromise(undefined, [pathStr, base64]);
     } else {
       // Fallback to text mode
-      _fs.writeFile.applySyncPromise(undefined, [pathStr, String(data)]);
+      return _fs.writeFile.applySyncPromise(undefined, [pathStr, String(data)]);
     }
   },
 
