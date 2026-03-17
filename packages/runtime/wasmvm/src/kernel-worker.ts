@@ -126,12 +126,12 @@ function createKernelFileIO(): WasiFileIO {
       const res = rpcCall('fdClose', { fd });
       return res.errno;
     },
-    fdPread(fd, maxBytes, _offset) {
-      const res = rpcCall('fdRead', { fd, length: maxBytes });
+    fdPread(fd, maxBytes, offset) {
+      const res = rpcCall('fdPread', { fd, length: maxBytes, offset: offset.toString() });
       return { errno: res.errno, data: res.data };
     },
-    fdPwrite(fd, data, _offset) {
-      const res = rpcCall('fdWrite', { fd, data: Array.from(data) });
+    fdPwrite(fd, data, offset) {
+      const res = rpcCall('fdPwrite', { fd, data: Array.from(data), offset: offset.toString() });
       return { errno: res.errno, written: res.intResult };
     },
   };

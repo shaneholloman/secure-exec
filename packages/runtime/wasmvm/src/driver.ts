@@ -323,6 +323,20 @@ class WasmVmRuntimeDriver implements RuntimeDriver {
           intResult = kernel.fdWrite(pid, msg.args.fd as number, new Uint8Array(msg.args.data as ArrayBuffer));
           break;
         }
+        case 'fdPread': {
+          const result = await kernel.fdPread(pid, msg.args.fd as number, msg.args.length as number, BigInt(msg.args.offset as string));
+          if (result.length > DATA_BUFFER_BYTES) {
+            errno = 76; // EIO — response exceeds SAB capacity
+            break;
+          }
+          data.set(result, 0);
+          responseData = result;
+          break;
+        }
+        case 'fdPwrite': {
+          intResult = await kernel.fdPwrite(pid, msg.args.fd as number, new Uint8Array(msg.args.data as ArrayBuffer), BigInt(msg.args.offset as string));
+          break;
+        }
         case 'fdOpen': {
           intResult = kernel.fdOpen(pid, msg.args.path as string, msg.args.flags as number, msg.args.mode as number);
           break;

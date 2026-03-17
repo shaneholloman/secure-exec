@@ -468,7 +468,7 @@
         "Tests pass"
       ],
       "priority": 28,
-      "passes": false,
+      "passes": true,
       "notes": "P4 — packages/kernel/src/fd-table.ts, kernel.ts, wasmvm kernel-worker. Wire into existing WasmVM stubs."
     },
     {

@@ -549,6 +549,43 @@ class KernelImpl implements Kernel {
 				entry.description.cursor = newCursor;
 				return newCursor;
 			},
+			fdPread: async (pid, fd, length, offset) => {
+				const table = this.getTable(pid);
+				const entry = table.get(fd);
+				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
+
+				// Pipes and PTYs are not seekable
+				if (this.pipeManager.isPipe(entry.description.id) || this.ptyManager.isPty(entry.description.id)) {
+					throw new KernelError("ESPIPE", "illegal seek");
+				}
+
+				// Read from VFS at given offset without moving cursor
+				const content = await this.vfs.readFile(entry.description.path);
+				const pos = Number(offset);
+				if (pos >= content.length) return new Uint8Array(0);
+				const end = Math.min(pos + length, content.length);
+				return content.slice(pos, end);
+			},
+			fdPwrite: async (pid, fd, data, offset) => {
+				const table = this.getTable(pid);
+				const entry = table.get(fd);
+				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
+
+				// Pipes and PTYs are not seekable
+				if (this.pipeManager.isPipe(entry.description.id) || this.ptyManager.isPty(entry.description.id)) {
+					throw new KernelError("ESPIPE", "illegal seek");
+				}
+
+				// Write at offset without moving cursor
+				const content = await this.vfs.readFile(entry.description.path);
+				const pos = Number(offset);
+				const endPos = pos + data.length;
+				const newContent = new Uint8Array(Math.max(content.length, endPos));
+				newContent.set(content);
+				newContent.set(data, pos);
+				await this.vfs.writeFile(entry.description.path, newContent);
+				return data.length;
+			},
 			fdDup: (pid, fd) => {
 				return this.getTable(pid).dup(fd);
 			},

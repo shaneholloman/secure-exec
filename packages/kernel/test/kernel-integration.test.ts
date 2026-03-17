@@ -360,6 +360,169 @@ describe("kernel + MockRuntimeDriver integration", () => {
 	});
 
 	// -----------------------------------------------------------------------
+	// fdPread / fdPwrite — positional I/O
+	// -----------------------------------------------------------------------
+
+	describe("fdPread and fdPwrite", () => {
+		it("fdPread reads at offset without changing cursor", async () => {
+			const driver = new MockRuntimeDriver(["x"], { x: { neverExit: true } });
+			const { kernel: k, vfs } = await createTestKernel({ drivers: [driver] });
+			kernel = k;
+
+			await vfs.writeFile("/tmp/pread-test.txt", "hello world");
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("x", []);
+			const fd = ki.fdOpen(proc.pid, "/tmp/pread-test.txt", 0);
+
+			// Pread at offset 0 → 'hello'
+			const data1 = await ki.fdPread(proc.pid, fd, 5, 0n);
+			expect(new TextDecoder().decode(data1)).toBe("hello");
+
+			// Cursor should still be at 0 — regular fdRead should start from 0
+			const data2 = await ki.fdRead(proc.pid, fd, 11);
+			expect(new TextDecoder().decode(data2)).toBe("hello world");
+
+			proc.kill(9);
+			await proc.wait();
+		});
+
+		it("fdPread at middle offset", async () => {
+			const driver = new MockRuntimeDriver(["x"], { x: { neverExit: true } });
+			const { kernel: k, vfs } = await createTestKernel({ drivers: [driver] });
+			kernel = k;
+
+			await vfs.writeFile("/tmp/pread-mid.txt", "hello world");
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("x", []);
+			const fd = ki.fdOpen(proc.pid, "/tmp/pread-mid.txt", 0);
+
+			// Pread at offset 6 → 'world'
+			const data = await ki.fdPread(proc.pid, fd, 5, 6n);
+			expect(new TextDecoder().decode(data)).toBe("world");
+
+			// Cursor unchanged — fdRead still starts from 0
+			const full = await ki.fdRead(proc.pid, fd, 5);
+			expect(new TextDecoder().decode(full)).toBe("hello");
+
+			proc.kill(9);
+			await proc.wait();
+		});
+
+		it("fdPwrite writes at offset without changing cursor", async () => {
+			const driver = new MockRuntimeDriver(["x"], { x: { neverExit: true } });
+			const { kernel: k, vfs } = await createTestKernel({ drivers: [driver] });
+			kernel = k;
+
+			await vfs.writeFile("/tmp/pwrite-test.txt", "hello world");
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("x", []);
+			const fd = ki.fdOpen(proc.pid, "/tmp/pwrite-test.txt", 2); // O_RDWR
+
+			// Pwrite "XXXXX" at offset 6
+			const written = await ki.fdPwrite(proc.pid, fd, new TextEncoder().encode("XXXXX"), 6n);
+			expect(written).toBe(5);
+
+			// Verify the file was modified
+			const content = await vfs.readFile("/tmp/pwrite-test.txt");
+			expect(new TextDecoder().decode(content)).toBe("hello XXXXX");
+
+			// Cursor unchanged — fdRead from 0
+			const data = await ki.fdRead(proc.pid, fd, 11);
+			expect(new TextDecoder().decode(data)).toBe("hello XXXXX");
+
+			proc.kill(9);
+			await proc.wait();
+		});
+
+		it("fdPwrite extends file when writing past end", async () => {
+			const driver = new MockRuntimeDriver(["x"], { x: { neverExit: true } });
+			const { kernel: k, vfs } = await createTestKernel({ drivers: [driver] });
+			kernel = k;
+
+			await vfs.writeFile("/tmp/pwrite-extend.txt", "AB");
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("x", []);
+			const fd = ki.fdOpen(proc.pid, "/tmp/pwrite-extend.txt", 2);
+
+			// Write at offset 5 (past end)
+			await ki.fdPwrite(proc.pid, fd, new TextEncoder().encode("CD"), 5n);
+
+			const content = await vfs.readFile("/tmp/pwrite-extend.txt");
+			expect(content.length).toBe(7);
+			expect(content[5]).toBe(67); // 'C'
+			expect(content[6]).toBe(68); // 'D'
+			// Bytes 2-4 should be zero-filled
+			expect(content[2]).toBe(0);
+			expect(content[3]).toBe(0);
+			expect(content[4]).toBe(0);
+
+			proc.kill(9);
+			await proc.wait();
+		});
+
+		it("fdPread on pipe FD throws ESPIPE", async () => {
+			const driver = new MockRuntimeDriver(["x"], { x: { neverExit: true } });
+			const { kernel: k } = await createTestKernel({ drivers: [driver] });
+			kernel = k;
+
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("x", []);
+			const { readFd, writeFd } = ki.pipe(proc.pid);
+
+			await expect(ki.fdPread(proc.pid, readFd, 10, 0n)).rejects.toThrow("ESPIPE");
+			await expect(ki.fdPwrite(proc.pid, writeFd, new Uint8Array([1, 2]), 0n)).rejects.toThrow("ESPIPE");
+
+			proc.kill(9);
+			await proc.wait();
+		});
+
+		it("fdPread at EOF returns empty", async () => {
+			const driver = new MockRuntimeDriver(["x"], { x: { neverExit: true } });
+			const { kernel: k, vfs } = await createTestKernel({ drivers: [driver] });
+			kernel = k;
+
+			await vfs.writeFile("/tmp/pread-eof.txt", "short");
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("x", []);
+			const fd = ki.fdOpen(proc.pid, "/tmp/pread-eof.txt", 0);
+
+			const data = await ki.fdPread(proc.pid, fd, 10, 100n);
+			expect(data.length).toBe(0);
+
+			proc.kill(9);
+			await proc.wait();
+		});
+
+		it("fdPread and fdPwrite do not interfere with each other's cursor", async () => {
+			const driver = new MockRuntimeDriver(["x"], { x: { neverExit: true } });
+			const { kernel: k, vfs } = await createTestKernel({ drivers: [driver] });
+			kernel = k;
+
+			await vfs.writeFile("/tmp/preadwrite.txt", "AAAAAAAAAA");
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("x", []);
+			const fd = ki.fdOpen(proc.pid, "/tmp/preadwrite.txt", 2); // O_RDWR
+
+			// Read 3 bytes via regular fdRead to advance cursor to 3
+			await ki.fdRead(proc.pid, fd, 3);
+
+			// Pwrite at offset 7 — cursor should stay at 3
+			await ki.fdPwrite(proc.pid, fd, new TextEncoder().encode("BB"), 7n);
+
+			// Pread at offset 0 — cursor should stay at 3
+			const preadData = await ki.fdPread(proc.pid, fd, 2, 0n);
+			expect(new TextDecoder().decode(preadData)).toBe("AA");
+
+			// Regular fdRead should continue from cursor=3
+			const data = await ki.fdRead(proc.pid, fd, 7);
+			expect(new TextDecoder().decode(data)).toBe("AAAABBA");
+
+			proc.kill(9);
+			await proc.wait();
+		});
+	});
+
+	// -----------------------------------------------------------------------
 	// stdin streaming
 	// -----------------------------------------------------------------------
 

@@ -407,3 +407,20 @@ PRD: ralph/kernel-hardening (46 stories)
   - devFdStat for pipe/PTY FDs returns a synthetic stat (mode 0o666, size 0, ino = description.id) since there's no underlying file to stat
   - isDevicePath now also matches /dev/pts/* prefix (needed for PTY paths from US-022)
 ---
+
+## 2026-03-17 - US-028
+- What was implemented: fdPread and fdPwrite (positional I/O) on KernelInterface — reads/writes at a given offset without moving the FD cursor
+- Files changed:
+  - packages/kernel/src/types.ts — added fdPread/fdPwrite to KernelInterface
+  - packages/kernel/src/kernel.ts — implemented fdPread (VFS read at offset, no cursor change) and fdPwrite (VFS read-modify-write at offset, file extension with zero-fill, no cursor change); ESPIPE for pipes/PTYs
+  - packages/runtime/wasmvm/src/kernel-worker.ts — wired fdPread/fdPwrite to pass offset through RPC (previously ignored `_offset` param)
+  - packages/runtime/wasmvm/src/driver.ts — added fdPread/fdPwrite cases in _handleSyscall to route to kernel.fdPread/fdPwrite
+  - packages/kernel/test/kernel-integration.test.ts — added 7 tests: pread at offset 0, pread at middle offset, pwrite at offset, pwrite file extension, ESPIPE on pipe, pread at EOF, combined pread+pwrite cursor independence
+  - prd.json — marked US-028 as passes: true
+- **Learnings for future iterations:**
+  - fdPwrite requires read-modify-write pattern: read existing content, create larger buffer if needed, write data at offset, writeFile back to VFS
+  - fdPwrite extending past file end fills gap with zeros (same as POSIX pwrite behavior)
+  - WasmVM kernel-worker was ignoring offset for fdPread/fdPwrite — just delegated to regular fdRead/fdWrite RPC. Fixed by adding dedicated fdPread/fdPwrite RPC calls with offset param
+  - Both fdPread and fdPwrite are async (return Promise) since they need VFS readFile which is async
+  - Existing tests use `driver.kernelInterface!` pattern to get KernelInterface, not the createTestKernel return value
+---

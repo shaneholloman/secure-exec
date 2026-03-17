@@ -230,6 +230,8 @@ export interface KernelInterface {
 		offset: bigint,
 		whence: number,
 	): Promise<bigint>;
+	fdPread(pid: number, fd: number, length: number, offset: bigint): Promise<Uint8Array>;
+	fdPwrite(pid: number, fd: number, data: Uint8Array, offset: bigint): Promise<number>;
 	fdDup(pid: number, fd: number): number;
 	fdDup2(pid: number, oldFd: number, newFd: number): void;
 	fdStat(pid: number, fd: number): FDStat;
