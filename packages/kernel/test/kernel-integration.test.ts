@@ -136,6 +136,57 @@ describe("kernel + MockRuntimeDriver integration", () => {
 	});
 
 	// -----------------------------------------------------------------------
+	// Concurrent PID stress test (US-010)
+	// -----------------------------------------------------------------------
+
+	describe("concurrent PID stress (100 processes)", () => {
+		it("spawn 100 processes concurrently, all PIDs are unique", async () => {
+			const N = 100;
+			const commands = Array.from({ length: N }, (_, i) => `stress-${i}`);
+			const configs: Record<string, MockCommandConfig> = {};
+			for (const cmd of commands) configs[cmd] = { exitCode: 0 };
+
+			const driver = new MockRuntimeDriver(commands, configs);
+			({ kernel } = await createTestKernel({ drivers: [driver] }));
+
+			const procs = commands.map((cmd) => kernel.spawn(cmd, []));
+			const pids = procs.map((p) => p.pid);
+			const uniquePids = new Set(pids);
+
+			expect(uniquePids.size).toBe(N);
+
+			// All PIDs are positive integers
+			for (const pid of pids) {
+				expect(pid).toBeGreaterThan(0);
+			}
+
+			await Promise.all(procs.map((p) => p.wait()));
+		});
+
+		it("spawn 100 processes, wait all, all exit codes captured correctly", async () => {
+			const N = 100;
+			const commands = Array.from({ length: N }, (_, i) => `exit-${i}`);
+			const configs: Record<string, MockCommandConfig> = {};
+			for (let i = 0; i < N; i++) configs[`exit-${i}`] = { exitCode: i % 256 };
+
+			const driver = new MockRuntimeDriver(commands, configs);
+			({ kernel } = await createTestKernel({ drivers: [driver] }));
+
+			const procs = commands.map((cmd) => kernel.spawn(cmd, []));
+
+			const codes = await Promise.all(procs.map((p) => p.wait()));
+
+			for (let i = 0; i < N; i++) {
+				expect(codes[i]).toBe(i % 256);
+			}
+
+			// PIDs should also all be unique
+			const uniquePids = new Set(procs.map((p) => p.pid));
+			expect(uniquePids.size).toBe(N);
+		});
+	});
+
+	// -----------------------------------------------------------------------
 	// BUG 3 fix: fdRead reads from VFS
 	// -----------------------------------------------------------------------
 
