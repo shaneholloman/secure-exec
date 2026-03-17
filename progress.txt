@@ -109,3 +109,15 @@ PRD: ralph/kernel-hardening (46 stories)
   - spawnSync is better than execSync for these tests since it doesn't wrap as bash -c
   - 12 processes is comfortably above the 10+ requirement and fast enough (~314ms for all tests)
 ---
+
+## 2026-03-17 - US-006
+- What was implemented: Added echoStdin config to MockRuntimeDriver and two new tests verifying full stdin→process→stdout pipeline
+- Files changed:
+  - packages/kernel/test/helpers.ts — added echoStdin option to MockCommandConfig; writeStdin echoes data via proc.onStdout, closeStdin triggers exit
+  - packages/kernel/test/kernel-integration.test.ts — added 2 tests: single writeStdin echo and multi-chunk writeStdin concatenation
+  - prd.json — marked US-006 as passes: true
+- **Learnings for future iterations:**
+  - onStdout is wired to a buffer callback at kernel.ts:237 immediately after driver.spawn() returns, so echoing in writeStdin works synchronously
+  - echoStdin processes use neverExit-like behavior (no auto-exit) and resolve on closeStdin — this mirrors real process stdin semantics
+  - spawnManaged replays buffered stdout when options.onStdout is set, ensuring no data loss between spawn and callback attachment
+---

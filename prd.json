@@ -92,7 +92,7 @@
         "Tests pass"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "P1 — packages/kernel/test/kernel-integration.test.ts — stdin streaming tests"
     },
     {
