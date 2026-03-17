@@ -584,7 +584,7 @@
         "Tests pass"
       ],
       "priority": 32,
-      "passes": false,
+      "passes": true,
       "notes": "This is the key cross-runtime integration test: Node (npm) reads package.json → spawns shell via child_process (routed through kernel to WasmVM) → WasmVM executes the shell command → output flows back through kernel pipes to npm → captured by kernel.exec(). Tests the full Node→kernel→WasmVM→kernel→Node round-trip."
     },
     {

@@ -9,6 +9,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import type {
   RuntimeDriver,
@@ -209,6 +210,68 @@ function createKernelVfsAdapter(kernelVfs: KernelInterface['vfs']): VirtualFileS
 }
 
 // ---------------------------------------------------------------------------
+// Host filesystem fallback — npm/npx module resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap a VFS with host filesystem fallback for read operations.
+ *
+ * When npm/npx runs inside the V8 isolate, require() must resolve npm's own
+ * internal modules (e.g. '../lib/cli/entry'). These live on the host
+ * filesystem, not in the kernel VFS. This wrapper tries the kernel VFS first
+ * and falls back to the host filesystem for reads. Writes always go to the
+ * kernel VFS.
+ */
+function createHostFallbackVfs(base: VirtualFileSystem): VirtualFileSystem {
+  return {
+    readFile: async (path) => {
+      try { return await base.readFile(path); }
+      catch { return new Uint8Array(await fsPromises.readFile(path)); }
+    },
+    readTextFile: async (path) => {
+      try { return await base.readTextFile(path); }
+      catch { return await fsPromises.readFile(path, 'utf-8'); }
+    },
+    readDir: async (path) => {
+      try { return await base.readDir(path); }
+      catch { return await fsPromises.readdir(path); }
+    },
+    readDirWithTypes: async (path) => {
+      try { return await base.readDirWithTypes(path); }
+      catch {
+        const entries = await fsPromises.readdir(path, { withFileTypes: true });
+        return entries.map(e => ({ name: e.name, isDirectory: e.isDirectory() }));
+      }
+    },
+    exists: async (path) => {
+      if (await base.exists(path)) return true;
+      try { await fsPromises.access(path); return true; } catch { return false; }
+    },
+    stat: async (path) => {
+      try { return await base.stat(path); }
+      catch {
+        const s = await fsPromises.stat(path);
+        return {
+          mode: s.mode,
+          size: s.size,
+          isDirectory: s.isDirectory(),
+          atimeMs: s.atimeMs,
+          mtimeMs: s.mtimeMs,
+          ctimeMs: s.ctimeMs,
+          birthtimeMs: s.birthtimeMs,
+        };
+      }
+    },
+    writeFile: (path, content) => base.writeFile(path, content),
+    createDir: (path) => base.createDir(path),
+    mkdir: (path) => base.mkdir(path),
+    removeFile: (path) => base.removeFile(path),
+    removeDir: (path) => base.removeDir(path),
+    rename: (oldPath, newPath) => base.rename(oldPath, newPath),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Node RuntimeDriver
 // ---------------------------------------------------------------------------
 
@@ -327,7 +390,13 @@ class NodeRuntimeDriver implements RuntimeDriver {
 
       // Build kernel-backed system driver
       const commandExecutor = createKernelCommandExecutor(kernel, ctx.pid);
-      const filesystem = createKernelVfsAdapter(kernel.vfs);
+      let filesystem: VirtualFileSystem = createKernelVfsAdapter(kernel.vfs);
+
+      // npm/npx need host filesystem fallback for internal module resolution
+      if (command === 'npm' || command === 'npx') {
+        filesystem = createHostFallbackVfs(filesystem);
+      }
+
       const systemDriver = createNodeDriver({
         filesystem,
         commandExecutor,

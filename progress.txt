@@ -51,6 +51,7 @@ Started: 2026-03-16
 - Node driver stdin: buffer writeStdin data, closeStdin resolves Promise passed to exec({ stdin }); auto-resolves via queueMicrotask for no-stdin processes
 - Bridge process.stdin does NOT emit 'end' for empty stdin ("") — pass undefined to exec() for no-stdin case
 - E2E fixture tests: use NodeFileSystem({ root: projectDir }) for real npm package resolution; kernel VFS root = project dir, cwd = '/'
+- npm/npx in V8 isolate need host filesystem fallback for internal module resolution — createHostFallbackVfs wraps kernel VFS, tries kernel first, falls back to host fs for reads
 
 ---
 
@@ -535,4 +536,20 @@ Started: 2026-03-16
   - secure-exec NodeExecutionDriver supports ESM natively (SourceTextModule + ESM resolver) — import syntax works through the kernel
   - Same fixture cache key is shared with project-matrix.test.ts — both tests benefit from each other's cached installs
   - normalizeText replaces both native-path and posix-path variants of projectDir with <project>
+---
+
+## 2026-03-16 - US-032
+- Created e2e-npm-scripts.test.ts with 4 tests covering npm run scripts through kernel
+- Added createHostFallbackVfs() to Node runtime driver — wraps kernel VFS with host filesystem fallback for npm/npx internal module resolution
+- Tests: npm run greet (echo hello world), npm run count (sequential && commands), npm run env-check ($npm_package_name injection), npm run nonexistent (non-zero exit)
+- Each test creates a fresh kernel with createIntegrationKernel({ runtimes: ['wasmvm', 'node'] })
+- All tests gracefully skipped when WASM binary not built (describe.skipIf)
+- Files changed: packages/runtime/node/src/driver.ts (host fallback VFS), packages/secure-exec/tests/kernel/e2e-npm-scripts.test.ts (new), prd.json
+- 158 secure-exec tests pass (79 skipped — WASM/pyodide), 66 kernel tests pass, 22 Node driver tests pass, 358 WasmVM tests pass, typecheck passes
+- **Learnings for future iterations:**
+  - npm running in V8 isolate needs to resolve its own internal modules (e.g., require('../lib/cli/entry')) from the host filesystem — kernel VFS (InMemoryFileSystem) doesn't have them
+  - createHostFallbackVfs wraps kernel VFS: tries kernel VFS first for reads, falls back to host fs; writes always go to kernel VFS
+  - npm run flow: kernel.exec → WasmVM shell → proc_spawn('npm') → kernel → Node driver → npm reads package.json from kernel VFS → npm spawns sh -c 'script' → kernel → WasmVM
+  - ModuleAccessFileSystem overlay only helps with bare module requires from node_modules, NOT relative requires like '../lib/cli/entry'
+  - Host fallback must be applied BEFORE ModuleAccessFileSystem wrapping (passed as base filesystem to createNodeDriver)
 ---
