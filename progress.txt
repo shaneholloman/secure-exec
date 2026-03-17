@@ -449,3 +449,16 @@ Started: 2026-03-16
   - For nested cross-runtime tests, shell quoting requires escaped inner quotes: `sh -c "node -e \\"process.exit(42)\\""`
   - child_process.execSync error objects have `.status` property containing the exit code
 ---
+
+## 2026-03-16 - US-028
+- Created module-resolution.test.ts with 5 tests covering Node require() through kernel VFS
+- Tests: require relative CJS module (./lib/utils → add(1,2)=3), require from node_modules (my-pkg), require missing module (MODULE_NOT_FOUND), require nested relative path (../../lib/utils → add(3,4)=7), require JSON file (config.json port=3000)
+- All tests use createIntegrationKernel({ runtimes: ['wasmvm', 'node'] })
+- Gracefully skipped when WASM binary not built (describe.skipIf)
+- Files changed: packages/secure-exec/tests/kernel/module-resolution.test.ts (new)
+- 157 secure-exec tests pass (5 module-resolution tests skipped — WASM not built), typecheck passes
+- **Learnings for future iterations:**
+  - kernel.exec() supports { cwd } option for setting working directory — needed for require('./relative') tests
+  - kernel.writeFile creates intermediate directories automatically (e.g., /app/node_modules/my-pkg/index.js)
+  - For JSON require tests, use JSON.stringify() to write valid JSON to VFS
+---

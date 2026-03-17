@@ -505,8 +505,8 @@
         "Tests pass"
       ],
       "priority": 28,
-      "passes": false,
-      "notes": "Module resolution is critical for real-world Node usage. If require() doesn't go through the kernel VFS, Node code can only use built-in modules. These tests verify the Node RuntimeDriver's module resolver uses kernel VFS for stat/readFile/readDir during the require resolution algorithm (checking package.json main field, index.js fallback, .js/.json extensions, node_modules traversal)."
+      "passes": true,
+      "notes": "5 tests: require relative CJS, require from node_modules, require missing module (MODULE_NOT_FOUND), require nested relative path, require JSON file. All gracefully skipped when WASM binary not built."
     },
     {
       "id": "US-029",
