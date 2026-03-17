@@ -4,6 +4,9 @@ PRD: ralph/kernel-hardening (46 stories)
 
 ## Codebase Patterns
 - Use `pnpm run check-types` (turbo) for typecheck, not bare `tsc`
+- Bridge readFileSync error.code is lost crossing isolate boundary — bridge must detect error patterns in message and re-create proper Node.js errors
+- Node driver creates system driver with `permissions: { ...allowAllChildProcess }` only — no fs permissions → deny-by-default → EACCES for all fs reads
+- Bridge fs.ts `createFsError` uses Node.js syscall conventions: readFileSync → "open", statSync → "stat", etc.
 - WasmVM driver.ts exports createWasmVmRuntime() — worker-based with SAB RPC for sync/async bridge
 - Kernel VFS uses removeFile/removeDir (not unlink/rmdir), and VirtualStat has isDirectory/isSymbolicLink (not type)
 - WasiFiletype must be re-exported from wasi-types.ts since polyfill imports it from there
@@ -70,4 +73,18 @@ PRD: ralph/kernel-hardening (46 stories)
   - vfsReadFile/vfsReaddir/etc already call data.set() which throws RangeError on overflow, caught as EIO by mapErrorToErrno fallback
   - General overflow guard after try/catch provides belt-and-suspenders protection for all data-returning syscalls
   - WASM-gated tests (describe.skipIf(!hasWasmBinary)) skip in CI when binary isn't built — see US-014
+---
+
+## 2026-03-17 - US-003
+- What was implemented: Replaced fake negative assertion test with 3 real boundary tests proving host filesystem access is blocked
+- Files changed:
+  - packages/runtime/node/test/driver.test.ts — replaced 'cannot access host filesystem directly' with 3 tests: direct /etc/passwd, symlink traversal, relative path traversal
+  - packages/secure-exec/src/bridge/fs.ts — fixed readFileSync error conversion to detect ENOENT and EACCES patterns in error messages, added EACCES errno mapping
+  - prd.json — marked US-003 as passes: true
+- **Learnings for future iterations:**
+  - Error `.code` property is stripped when crossing the V8 isolate boundary via `applySyncPromise` — only `.message` survives
+  - Bridge must detect error codes in the message string (e.g., "EACCES", "ENOENT") and reconstruct proper Node.js errors with `.code`
+  - Node driver's deny-by-default fs permissions mean `/etc/passwd` returns EACCES (not ENOENT) — the permission layer blocks before VFS lookup
+  - Bridge `readFileSync` was inconsistent with `statSync` — statSync already checked for "ENOENT" in messages, readFileSync did not
+  - `tests/runtime-driver/node/index.test.ts` has flaky ECONNREFUSED failures (pre-existing, not related to this change)
 ---
