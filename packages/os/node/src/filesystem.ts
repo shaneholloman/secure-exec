@@ -91,6 +91,10 @@ export class NodeFileSystem implements VirtualFileSystem {
 		await fs.rename(this.resolve(oldPath), this.resolve(newPath));
 	}
 
+	async realpath(p: string): Promise<string> {
+		return fs.realpath(this.resolve(p));
+	}
+
 	async symlink(target: string, linkPath: string): Promise<void> {
 		await fs.symlink(target, this.resolve(linkPath));
 	}

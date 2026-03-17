@@ -159,6 +159,10 @@ export function createDeviceLayer(vfs: VirtualFileSystem): VirtualFileSystem {
 			return vfs.rename(oldPath, newPath);
 		},
 
+		async realpath(path) {
+			return vfs.realpath(path);
+		},
+
 		// Passthrough for POSIX extensions
 		async symlink(target, linkPath) {
 			return vfs.symlink(target, linkPath);

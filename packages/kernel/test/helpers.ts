@@ -127,6 +127,15 @@ export class TestFileSystem implements VirtualFileSystem {
 		throw new Error(`ENOENT: ${o}`);
 	}
 
+	async realpath(path: string): Promise<string> {
+		const n = normalizePath(path);
+		// Resolve symlinks
+		const target = this.symlinks.get(n);
+		if (target) return normalizePath(target);
+		if (this.files.has(n) || this.dirs.has(n)) return n;
+		throw new Error(`ENOENT: ${n}`);
+	}
+
 	async symlink(target: string, linkPath: string): Promise<void> {
 		this.symlinks.set(normalizePath(linkPath), target);
 	}

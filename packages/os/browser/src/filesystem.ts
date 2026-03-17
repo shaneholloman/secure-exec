@@ -245,6 +245,10 @@ export class InMemoryFileSystem implements VirtualFileSystem {
 		this.entries.delete(resolved);
 	}
 
+	async realpath(path: string): Promise<string> {
+		return this.resolvePath(path);
+	}
+
 	async rename(oldPath: string, newPath: string): Promise<void> {
 		const oldResolved = this.resolvePath(oldPath);
 		const newNorm = normalizePath(newPath);

@@ -64,8 +64,8 @@
         "Typecheck passes"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Kernel types and VFS from commit b7a78c4; added missing realpath to VFS interface and all implementations"
     },
     {
       "id": "US-005",

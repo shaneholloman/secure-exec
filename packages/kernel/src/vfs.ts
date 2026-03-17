@@ -42,6 +42,7 @@ export interface VirtualFileSystem {
 	removeFile(path: string): Promise<void>;
 	removeDir(path: string): Promise<void>;
 	rename(oldPath: string, newPath: string): Promise<void>;
+	realpath(path: string): Promise<string>;
 
 	// --- Symlinks ---
 

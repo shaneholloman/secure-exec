@@ -61,6 +61,7 @@ export function wrapFileSystem(
 			check("rename", newPath);
 			return fs.rename(oldPath, newPath);
 		},
+		realpath: async (path) => { check("read", path); return fs.realpath(path); },
 		symlink: async (target, linkPath) => { check("symlink", linkPath); return fs.symlink(target, linkPath); },
 		readlink: async (path) => { check("readlink", path); return fs.readlink(path); },
 		lstat: async (path) => { check("stat", path); return fs.lstat(path); },

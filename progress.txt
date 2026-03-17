@@ -6,6 +6,7 @@ Started: 2026-03-16
 - WasmVM test files use `node:test`/`node:assert`; test script uses `node --test` (US-015 will convert to vitest)
 - Kernel package tests already pass (36 tests across 5 files)
 - pnpm-workspace.yaml includes `packages/os/*` and `packages/runtime/*` globs
+- Adding a VFS method requires updating: interface (vfs.ts), all implementations (TestFileSystem, NodeFileSystem, InMemoryFileSystem), device-layer.ts, permissions.ts
 
 ---
 
@@ -44,4 +45,21 @@ Started: 2026-03-16
   - docs-internal/glossary.md is the canonical glossary — has all kernel terms already defined
   - docs-internal/arch/overview.md has full kernel architecture diagram and component descriptions
   - wasmvm/notes/ also contains friction/, misc/ (comparison-matrix.jsx), and specs/complete/ subdirectories
+---
+
+## 2026-03-16 - US-004
+- Kernel package already existed at packages/kernel/ from commit b7a78c4
+- Added missing `realpath` method to VirtualFileSystem interface and all implementations:
+  - packages/kernel/src/vfs.ts (interface)
+  - packages/kernel/test/helpers.ts (TestFileSystem)
+  - packages/os/node/src/filesystem.ts (NodeFileSystem - delegates to fs.realpath)
+  - packages/os/browser/src/filesystem.ts (InMemoryFileSystem - delegates to resolvePath)
+  - packages/kernel/src/device-layer.ts (passthrough to backing VFS)
+  - packages/kernel/src/permissions.ts (read permission check + passthrough)
+- All 36 kernel tests pass, typecheck passes
+- Files changed: 6 files (vfs.ts, helpers.ts, 2 filesystem.ts, device-layer.ts, permissions.ts), prd.json
+- **Learnings for future iterations:**
+  - VFS implementations exist in 3 places: kernel test helpers, os/node, os/browser
+  - Adding a VFS method requires updating: interface, all implementations, device layer, permissions wrapper
+  - secure-exec's own VFS (packages/secure-exec/src/) is a separate interface, not the kernel's
 ---
