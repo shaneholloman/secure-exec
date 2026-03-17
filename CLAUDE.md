@@ -64,6 +64,12 @@ Follow the style in `packages/secure-exec/src/index.ts`.
   - `docs/system-drivers/node.mdx` — update when createNodeDriver options change
   - `docs/system-drivers/browser.mdx` — update when createBrowserDriver options change
 
+## Backlog Tracking
+
+- `docs-internal/todo.md` is the active backlog — keep it up to date when completing tasks
+- when adding new work, add it to todo.md
+- when completing work, mark items done in todo.md
+
 ## Skills
 
 - create project skills in `.claude/skills/`

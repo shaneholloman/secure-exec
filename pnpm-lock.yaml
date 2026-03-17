@@ -105,6 +105,21 @@ importers:
         specifier: ^15.1.0
         version: 15.1.0
     devDependencies:
+      '@secure-exec/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@secure-exec/os-browser':
+        specifier: workspace:*
+        version: link:../os/browser
+      '@secure-exec/runtime-node':
+        specifier: workspace:*
+        version: link:../runtime/node
+      '@secure-exec/runtime-python':
+        specifier: workspace:*
+        version: link:../runtime/python
+      '@secure-exec/runtime-wasmvm':
+        specifier: workspace:*
+        version: link:../runtime/wasmvm
       '@types/node':
         specifier: ^22.10.2
         version: 22.19.3

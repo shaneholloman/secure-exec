@@ -1,0 +1,207 @@
+---
+title: Kernel Quickstart
+description: Run shell commands and Node code through the kernel in a few minutes.
+icon: "terminal"
+---
+
+The kernel is a userspace OS that routes commands to pluggable runtime drivers. Mount WasmVM for shell/coreutils, Node for JavaScript, and Python for Python — all sharing a single VFS.
+
+<Steps>
+  <Step title="Install">
+    ```bash
+    pnpm add @secure-exec/kernel @secure-exec/runtime-wasmvm @secure-exec/runtime-node
+    ```
+  </Step>
+
+  <Step title="Create a kernel">
+    ```ts
+    import { createKernel } from "@secure-exec/kernel";
+    import { createInMemoryFileSystem } from "@secure-exec/os-browser";
+
+    const vfs = createInMemoryFileSystem();
+    const kernel = createKernel({ filesystem: vfs });
+    ```
+
+    <Tabs>
+      <Tab title="In-Memory (Browser/Test)">
+        ```ts
+        import { createInMemoryFileSystem } from "@secure-exec/os-browser";
+
+        const vfs = createInMemoryFileSystem();
+        const kernel = createKernel({ filesystem: vfs });
+        ```
+      </Tab>
+      <Tab title="Real Filesystem (Node)">
+        ```ts
+        import { NodeFileSystem } from "@secure-exec/os-node";
+
+        const vfs = new NodeFileSystem();
+        const kernel = createKernel({ filesystem: vfs });
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Mount runtime drivers">
+    Mount WasmVM first (provides shell + 90 coreutils), then Node (overrides the `node` stub).
+
+    ```ts
+    import { createWasmVmRuntime } from "@secure-exec/runtime-wasmvm";
+    import { createNodeRuntime } from "@secure-exec/runtime-node";
+
+    await kernel.mount(createWasmVmRuntime({
+      wasmBinaryPath: "./wasmvm/target/wasm32-wasip1/release/multicall.wasm",
+    }));
+    await kernel.mount(createNodeRuntime());
+    ```
+
+    <Info>
+    Mount order matters. The last-mounted driver wins when two drivers register the same command. Mount WasmVM first so its `node` stub gets overridden by the real Node driver.
+    </Info>
+  </Step>
+
+  <Step title="Run shell commands">
+    `kernel.exec()` runs a command through the WasmVM shell and returns stdout, stderr, and the exit code.
+
+    ```ts
+    const result = await kernel.exec("echo hello world");
+    console.log(result.stdout);   // "hello world\n"
+    console.log(result.exitCode); // 0
+    ```
+
+    Pipes, redirects, and shell operators work:
+
+    ```ts
+    const result = await kernel.exec("echo hello | tr a-z A-Z");
+    console.log(result.stdout); // "HELLO\n"
+    ```
+  </Step>
+
+  <Step title="Run Node code through the kernel">
+    Since the Node driver is mounted, `node` commands route to a real V8 isolate:
+
+    ```ts
+    const result = await kernel.exec('node -e "console.log(2 + 2)"');
+    console.log(result.stdout); // "4\n"
+    ```
+
+    Node's `child_process` routes back through the kernel. This means Node code can call shell commands via WasmVM:
+
+    ```ts
+    const result = await kernel.exec(`node -e "
+      const { execSync } = require('child_process');
+      const files = execSync('ls /tmp', { encoding: 'utf-8' });
+      console.log(files.trim());
+    "`);
+    ```
+  </Step>
+
+  <Step title="Spawn processes with streaming I/O">
+    `kernel.spawn()` gives you a `ManagedProcess` handle with real-time stdin/stdout/stderr:
+
+    ```ts
+    const chunks: string[] = [];
+
+    const proc = kernel.spawn("node", ["-e", `
+      process.stdout.write("line 1\\n");
+      process.stdout.write("line 2\\n");
+    `], {
+      onStdout: (data) => chunks.push(new TextDecoder().decode(data)),
+    });
+
+    const exitCode = await proc.wait();
+    console.log(chunks); // ["line 1\n", "line 2\n"]
+    console.log(exitCode); // 0
+    ```
+
+    Write to stdin:
+
+    ```ts
+    const proc = kernel.spawn("cat", [], {
+      onStdout: (data) => process.stdout.write(data),
+    });
+
+    proc.writeStdin(new TextEncoder().encode("hello from stdin\n"));
+    proc.closeStdin();
+
+    await proc.wait(); // stdout: "hello from stdin\n"
+    ```
+  </Step>
+
+  <Step title="Use the shared VFS">
+    All runtimes share the same kernel VFS. Writes from one are immediately visible to others:
+
+    ```ts
+    // Write from kernel API
+    await kernel.writeFile("/tmp/data.txt", "hello from kernel");
+
+    // Read from WasmVM
+    const r1 = await kernel.exec("cat /tmp/data.txt");
+    console.log(r1.stdout); // "hello from kernel"
+
+    // Read from Node
+    const r2 = await kernel.exec(`node -e "
+      const fs = require('fs');
+      console.log(fs.readFileSync('/tmp/data.txt', 'utf8'));
+    "`);
+    console.log(r2.stdout); // "hello from kernel\n"
+    ```
+  </Step>
+
+  <Step title="Clean up">
+    ```ts
+    await kernel.dispose();
+    ```
+
+    `dispose()` sends SIGTERM to all running processes, waits 1 second, then cleans up drivers in reverse mount order.
+  </Step>
+</Steps>
+
+## Full example
+
+```ts
+import { createKernel } from "@secure-exec/kernel";
+import { createInMemoryFileSystem } from "@secure-exec/os-browser";
+import { createWasmVmRuntime } from "@secure-exec/runtime-wasmvm";
+import { createNodeRuntime } from "@secure-exec/runtime-node";
+
+const vfs = createInMemoryFileSystem();
+const kernel = createKernel({ filesystem: vfs });
+
+await kernel.mount(createWasmVmRuntime({
+  wasmBinaryPath: "./wasmvm/target/wasm32-wasip1/release/multicall.wasm",
+}));
+await kernel.mount(createNodeRuntime());
+
+// Shell commands
+const echo = await kernel.exec("echo hello | tr a-z A-Z");
+console.log(echo.stdout); // "HELLO\n"
+
+// Node code that calls shell commands
+const node = await kernel.exec(`node -e "
+  const { execSync } = require('child_process');
+  console.log(execSync('echo hi from shell', { encoding: 'utf-8' }).trim());
+"`);
+console.log(node.stdout); // "hi from shell\n"
+
+// Shared VFS
+await kernel.writeFile("/tmp/msg.txt", "cross-runtime");
+const cat = await kernel.exec("cat /tmp/msg.txt");
+console.log(cat.stdout); // "cross-runtime"
+
+await kernel.dispose();
+```
+
+## Next steps
+
+<CardGroup cols={3}>
+  <Card title="Kernel API" icon="rectangle-code" href="/kernel/api-reference">
+    Full type reference for all kernel exports.
+  </Card>
+  <Card title="Cross-Runtime" icon="arrows-split-up-and-left" href="/kernel/cross-runtime">
+    Pipes, VFS sharing, and npm scripts across runtimes.
+  </Card>
+  <Card title="Custom Runtimes" icon="puzzle-piece" href="/kernel/custom-runtime">
+    Write your own RuntimeDriver.
+  </Card>
+</CardGroup>

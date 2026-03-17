@@ -1,0 +1,238 @@
+---
+title: Cross-Runtime Integration
+description: Pipes, VFS sharing, and npm scripts across WasmVM, Node, and Python.
+icon: "arrows-split-up-and-left"
+---
+
+The kernel lets multiple runtimes share a single OS. Processes in WasmVM can pipe data to Node, Node can call shell commands via `child_process`, and all runtimes see the same files.
+
+## Command routing
+
+When you call `kernel.exec("node -e ...")`, the kernel resolves `node` through the command registry to find which driver handles it. The last-mounted driver wins on conflicts.
+
+```ts
+await kernel.mount(createWasmVmRuntime({ wasmBinaryPath: "..." }));
+// WasmVM registers: sh, bash, cat, grep, echo, node (stub), python (stub), ...
+
+await kernel.mount(createNodeRuntime());
+// Node registers: node, npm, npx — overrides WasmVM's "node" stub
+
+await kernel.mount(createPythonRuntime());
+// Python registers: python, python3 — overrides WasmVM's "python" stub
+```
+
+After mounting, the command registry looks like:
+
+| Command | Driver | Why |
+|---|---|---|
+| `sh`, `bash`, `cat`, `grep`, `echo`, `ls`, `find`, ... | wasmvm | Mounted first, no override |
+| `node`, `npm`, `npx` | node | Mounted second, overrides wasmvm stubs |
+| `python`, `python3` | python | Mounted third, overrides wasmvm stubs |
+
+## child_process routing (Node → shell)
+
+When Node code calls `child_process.spawn()` or `execSync()`, the bridge routes it through `kernel.spawn()`. The kernel resolves the command to the right driver.
+
+```ts
+// Node code runs in a V8 isolate. execSync routes through kernel to WasmVM.
+const result = await kernel.exec(`node -e "
+  const { execSync } = require('child_process');
+  const output = execSync('echo hello | tr a-z A-Z', { encoding: 'utf-8' });
+  console.log(output.trim());
+"`);
+
+console.log(result.stdout); // "HELLO\n"
+```
+
+The full routing chain:
+
+```
+kernel.exec("node -e '...'")
+  → kernel resolves "node" → Node driver
+    → V8 isolate executes code
+      → execSync("echo hello | tr a-z A-Z")
+        → bridge routes to kernel.spawn("sh", ["-c", "echo hello | tr a-z A-Z"])
+          → kernel resolves "sh" → WasmVM driver
+            → WASM shell executes pipeline
+              → stdout flows back through kernel pipes
+```
+
+## Cross-runtime pipes
+
+The shell pipe operator creates kernel pipes between processes, even across different runtimes.
+
+### WasmVM → Node pipe
+
+```ts
+// echo (WasmVM) pipes stdout to node (Node driver)
+const result = await kernel.exec(`echo '{"name":"world"}' | node -e '
+  let d = "";
+  process.stdin.on("data", c => d += c);
+  process.stdin.on("end", () => {
+    const obj = JSON.parse(d);
+    console.log("Hello, " + obj.name + "!");
+  });
+'`);
+
+console.log(result.stdout); // "Hello, world!\n"
+```
+
+### Node → WasmVM pipe
+
+```ts
+// Node writes to stdout, WasmVM grep filters it
+const result = await kernel.exec(`node -e '
+  console.log("apple");
+  console.log("banana");
+  console.log("avocado");
+' | grep ^a`);
+
+console.log(result.stdout); // "apple\navocado\n"
+```
+
+### Programmatic pipe creation
+
+For advanced use, create pipes manually via the `KernelInterface`:
+
+```ts
+// Inside a RuntimeDriver — create a pipe and wire it to child processes
+const { readFd, writeFd } = ki.pipe(parentPid);
+
+// Writer process: stdout → pipe write end
+const writer = ki.spawn("echo", ["hello"], {
+  ppid: parentPid,
+  stdoutFd: writeFd,
+});
+
+// Reader process: pipe read end → stdin
+const reader = ki.spawn("cat", [], {
+  ppid: parentPid,
+  stdinFd: readFd,
+  onStdout: (data) => chunks.push(data),
+});
+
+// Close parent's copies of pipe ends (children inherited them)
+ki.fdClose(parentPid, readFd);
+ki.fdClose(parentPid, writeFd);
+
+await writer.wait();
+await reader.wait();
+// chunks contains "hello\n"
+```
+
+## Shared VFS
+
+All runtimes read and write the same kernel VFS. Changes are immediately visible across runtimes.
+
+```ts
+// Write from kernel API
+await kernel.writeFile("/tmp/config.json", '{"port": 3000}');
+
+// Read from WasmVM
+const r1 = await kernel.exec("cat /tmp/config.json");
+console.log(r1.stdout); // '{"port": 3000}'
+
+// Read from Node
+const r2 = await kernel.exec(`node -e "
+  const config = JSON.parse(require('fs').readFileSync('/tmp/config.json', 'utf8'));
+  console.log('Port:', config.port);
+"`);
+console.log(r2.stdout); // "Port: 3000\n"
+
+// Write from Node, read from WasmVM
+await kernel.exec(`node -e "
+  require('fs').writeFileSync('/tmp/from-node.txt', 'written by node');
+"`);
+const r3 = await kernel.exec("cat /tmp/from-node.txt");
+console.log(r3.stdout); // "written by node"
+```
+
+## npm run scripts
+
+npm reads `package.json`, calls `child_process.spawn('sh', ['-c', scriptCommand])`, which routes through the kernel to WasmVM:
+
+```ts
+// Prepare a project in the VFS
+await kernel.writeFile("/app/package.json", JSON.stringify({
+  name: "my-app",
+  scripts: {
+    greet: "echo Hello from npm script!",
+    build: "echo Building... && echo Done",
+  },
+}));
+
+const result = await kernel.exec("npm run greet", {
+  cwd: "/app",
+  timeout: 30000,
+});
+console.log(result.stdout); // includes "Hello from npm script!"
+```
+
+The full round-trip:
+
+```
+kernel.exec("npm run greet")
+  → "npm" resolves to Node driver
+    → npm reads package.json, finds scripts.greet = "echo Hello..."
+      → npm calls child_process.spawn("sh", ["-c", "echo Hello..."])
+        → bridge routes to kernel.spawn("sh", ...)
+          → "sh" resolves to WasmVM driver
+            → WasmVM shell executes "echo Hello from npm script!"
+              → stdout flows back through kernel → npm → kernel
+```
+
+## Error and exit code propagation
+
+Exit codes propagate correctly across runtime boundaries:
+
+```ts
+// Node exits with code 42
+const r1 = await kernel.exec('node -e "process.exit(42)"');
+console.log(r1.exitCode); // 42
+
+// WasmVM shell exits with code 7
+const r2 = await kernel.exec("sh -c 'exit 7'");
+console.log(r2.exitCode); // 7
+
+// Nested: WasmVM shell spawns Node which exits non-zero
+const r3 = await kernel.exec(`sh -c 'node -e "process.exit(42)"'`);
+console.log(r3.exitCode); // 42
+
+// stderr captured across runtimes
+const r4 = await kernel.exec('node -e "console.error(\'oops\')"');
+console.log(r4.stderr); // "oops\n"
+```
+
+## Stdin streaming
+
+Write data to a running process:
+
+```ts
+// WasmVM cat reads stdin
+const chunks: string[] = [];
+const proc = kernel.spawn("cat", [], {
+  onStdout: (data) => chunks.push(new TextDecoder().decode(data)),
+});
+
+proc.writeStdin(new TextEncoder().encode("line 1\n"));
+proc.writeStdin(new TextEncoder().encode("line 2\n"));
+proc.closeStdin(); // sends EOF
+
+const code = await proc.wait();
+console.log(chunks.join("")); // "line 1\nline 2\n"
+```
+
+```ts
+// Node process reads stdin
+const proc = kernel.spawn("node", ["-e", `
+  let data = "";
+  process.stdin.on("data", (chunk) => data += chunk);
+  process.stdin.on("end", () => console.log(data.toUpperCase()));
+`], {
+  onStdout: (data) => process.stdout.write(data),
+});
+
+proc.writeStdin("hello from stdin");
+proc.closeStdin();
+await proc.wait(); // stdout: "HELLO FROM STDIN"
+```

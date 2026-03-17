@@ -1,0 +1,335 @@
+---
+title: Kernel API Reference
+description: Complete reference for all kernel types and methods.
+icon: "rectangle-code"
+---
+
+## `createKernel(options)`
+
+Creates a new kernel instance.
+
+```ts
+import { createKernel } from "@secure-exec/kernel";
+
+const kernel = createKernel({
+  filesystem: vfs,
+  permissions: allowAll,
+  env: { HOME: "/root", PATH: "/bin:/usr/bin" },
+  cwd: "/root",
+});
+```
+
+**`KernelOptions`**
+
+| Option | Type | Description |
+|---|---|---|
+| `filesystem` | `VirtualFileSystem` | Backing filesystem. **Required.** |
+| `permissions` | `Permissions` | Access control. Default: allow all. |
+| `env` | `Record<string, string>` | Initial environment variables. |
+| `cwd` | `string` | Initial working directory. Default `"/"`. |
+
+---
+
+## `Kernel`
+
+The kernel instance returned by `createKernel()`.
+
+### `kernel.mount(driver)`
+
+Register a runtime driver. Commands from the driver become available to `exec()` and `spawn()`.
+
+```ts
+await kernel.mount(createWasmVmRuntime({ wasmBinaryPath: "..." }));
+await kernel.mount(createNodeRuntime());
+```
+
+Last-mounted driver wins when two drivers register the same command:
+
+```ts
+// WasmVM registers "node" as a stub
+await kernel.mount(createWasmVmRuntime({ wasmBinaryPath: "..." }));
+// Node driver overrides the "node" command
+await kernel.mount(createNodeRuntime());
+
+// "node" now routes to the Node driver
+const result = await kernel.exec('node -e "console.log(42)"');
+```
+
+| Param | Type | Description |
+|---|---|---|
+| `driver` | `RuntimeDriver` | Driver to mount. |
+| Returns | `Promise<void>` | Resolves when driver is initialized and commands registered. |
+
+### `kernel.exec(command, options?)`
+
+Execute a shell command string. Requires a shell driver (WasmVM) to be mounted.
+
+```ts
+const result = await kernel.exec("echo hello && ls /tmp", {
+  timeout: 10000,
+  env: { DEBUG: "true" },
+});
+
+console.log(result.exitCode); // 0
+console.log(result.stdout);   // "hello\n..."
+console.log(result.stderr);   // ""
+```
+
+**`ExecOptions`**
+
+| Option | Type | Description |
+|---|---|---|
+| `timeout` | `number` | Kill process after N ms. |
+| `env` | `Record<string, string>` | Environment variables (merged with kernel defaults). |
+| `cwd` | `string` | Working directory override. |
+| `stdin` | `string` | Data to write to stdin, then close. |
+
+**`ExecResult`**
+
+```ts
+{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+```
+
+### `kernel.spawn(command, args, options?)`
+
+Spawn a process directly. Returns a `ManagedProcess` handle for streaming I/O.
+
+```ts
+const proc = kernel.spawn("node", ["-e", "console.log('hi')"], {
+  onStdout: (data) => process.stdout.write(data),
+  onStderr: (data) => process.stderr.write(data),
+  env: { NODE_ENV: "production" },
+});
+
+console.log(proc.pid); // e.g. 42
+const exitCode = await proc.wait();
+```
+
+**`SpawnOptions`**
+
+| Option | Type | Description |
+|---|---|---|
+| `onStdout` | `(data: Uint8Array) => void` | Callback for stdout chunks. |
+| `onStderr` | `(data: Uint8Array) => void` | Callback for stderr chunks. |
+| `env` | `Record<string, string>` | Environment variables. |
+| `cwd` | `string` | Working directory. |
+| `ppid` | `number` | Parent PID (for cross-runtime spawns). |
+| `stdinFd` | `number` | Override stdin with this FD (for pipes). |
+| `stdoutFd` | `number` | Override stdout with this FD (for pipes). |
+| `stderrFd` | `number` | Override stderr with this FD (for pipes). |
+
+### `kernel.dispose()`
+
+Terminate all processes, clean up drivers, release resources.
+
+```ts
+await kernel.dispose();
+// All subsequent calls throw "disposed"
+```
+
+Sends SIGTERM to running processes, waits 1 second grace period, then disposes drivers in reverse mount order.
+
+### Filesystem convenience methods
+
+```ts
+await kernel.writeFile("/tmp/data.txt", "hello");
+const data = await kernel.readFile("/tmp/data.txt");     // Uint8Array
+await kernel.mkdir("/tmp/subdir");
+const entries = await kernel.readdir("/tmp");             // ["data.txt", "subdir"]
+const stat = await kernel.stat("/tmp/data.txt");          // { size, mode, ... }
+const exists = await kernel.exists("/tmp/data.txt");      // true
+```
+
+### Introspection
+
+```ts
+// Map of command name → driver name
+kernel.commands; // Map { "sh" => "wasmvm", "node" => "node", ... }
+
+// Map of PID → process info
+kernel.processes; // Map { 1 => { pid: 1, status: "running", ... }, ... }
+```
+
+---
+
+## `ManagedProcess`
+
+Returned by `kernel.spawn()`. Wraps a running process.
+
+```ts
+const proc = kernel.spawn("cat", []);
+
+proc.writeStdin(new TextEncoder().encode("hello\n"));
+proc.closeStdin();
+proc.kill(15); // SIGTERM
+
+const exitCode = await proc.wait();
+```
+
+| Property/Method | Type | Description |
+|---|---|---|
+| `pid` | `number` | Process ID in kernel process table. |
+| `writeStdin(data)` | `(data: Uint8Array \| string) => void` | Write to process stdin. |
+| `closeStdin()` | `() => void` | Close stdin (sends EOF). |
+| `kill(signal?)` | `(signal?: number) => void` | Send signal. Default SIGTERM (15). |
+| `wait()` | `() => Promise<number>` | Wait for exit, returns exit code. |
+
+---
+
+## `RuntimeDriver`
+
+Interface for pluggable execution engines. Implement this to add a new language runtime to the kernel.
+
+```ts
+interface RuntimeDriver {
+  name: string;
+  commands: string[];
+  init(kernel: KernelInterface): Promise<void>;
+  spawn(command: string, args: string[], ctx: ProcessContext): DriverProcess;
+  dispose(): Promise<void>;
+}
+```
+
+See [Writing a Custom RuntimeDriver](/kernel/custom-runtime) for a full guide.
+
+### Built-in drivers
+
+| Factory | Package | Commands |
+|---|---|---|
+| `createWasmVmRuntime(options?)` | `@secure-exec/runtime-wasmvm` | `sh`, `bash`, `cat`, `grep`, `sed`, `awk`, `jq`, `ls`, `find`, and 80+ more |
+| `createNodeRuntime()` | `@secure-exec/runtime-node` | `node`, `npm`, `npx` |
+| `createPythonRuntime()` | `@secure-exec/runtime-python` | `python`, `python3` |
+
+---
+
+## `KernelInterface`
+
+Syscall surface exposed to runtime drivers during `init()`. Drivers use this to access the kernel's VFS, FD table, process table, and pipes.
+
+### File descriptor operations
+
+```ts
+// Open a file, returns FD number
+const fd = ki.fdOpen(pid, "/tmp/file.txt", O_RDONLY, 0o644);
+
+// Read up to 1024 bytes
+const data: Uint8Array = await ki.fdRead(pid, fd, 1024);
+
+// Write bytes, returns bytes written
+const written: number = ki.fdWrite(pid, fd, new TextEncoder().encode("hello"));
+
+// Seek (returns new cursor position as bigint)
+const pos: bigint = ki.fdSeek(pid, fd, 0n, SEEK_SET);
+
+// Close
+ki.fdClose(pid, fd);
+
+// Duplicate
+const fd2 = ki.fdDup(pid, fd);
+ki.fdDup2(pid, oldFd, newFd);
+
+// Stat an open FD
+const stat = ki.fdStat(pid, fd);
+// { filetype, flags, rightsBase, rightsInheriting }
+```
+
+### Process operations
+
+```ts
+// Spawn a child process (cross-runtime dispatch)
+const child: ManagedProcess = ki.spawn(command, args, {
+  ppid: parentPid,
+  env: { ... },
+  cwd: "/app",
+  onStdout: (data) => { ... },
+  onStderr: (data) => { ... },
+});
+
+// Wait for child
+const { pid, status } = await ki.waitpid(childPid);
+
+// Send signal
+ki.kill(childPid, 15); // SIGTERM
+
+// Create a pipe
+const { readFd, writeFd } = ki.pipe(parentPid);
+```
+
+### VFS access
+
+```ts
+ki.vfs.readFile(path);
+ki.vfs.writeFile(path, content);
+ki.vfs.readDir(path);
+ki.vfs.stat(path);
+ki.vfs.mkdir(path);
+ki.vfs.exists(path);
+ki.vfs.removeFile(path);
+ki.vfs.rename(oldPath, newPath);
+ki.vfs.symlink(target, linkPath);
+ki.vfs.readlink(path);
+// ... full POSIX VFS surface
+```
+
+---
+
+## `ProcessContext`
+
+Passed to `RuntimeDriver.spawn()`. Contains everything the driver needs to set up a process.
+
+```ts
+interface ProcessContext {
+  pid: number;
+  ppid: number;
+  env: Record<string, string>;
+  cwd: string;
+  fds: { stdin: number; stdout: number; stderr: number };
+  onStdout?: (data: Uint8Array) => void;
+  onStderr?: (data: Uint8Array) => void;
+}
+```
+
+---
+
+## `DriverProcess`
+
+Returned by `RuntimeDriver.spawn()`. The kernel wraps this into a `ManagedProcess`.
+
+```ts
+interface DriverProcess {
+  writeStdin(data: Uint8Array): void;
+  closeStdin(): void;
+  kill(signal: number): void;
+  wait(): Promise<number>;
+  onExit: ((code: number) => void) | null;
+  onStdout: ((data: Uint8Array) => void) | null;
+  onStderr: ((data: Uint8Array) => void) | null;
+}
+```
+
+---
+
+## Permission presets
+
+```ts
+import { allowAll, allowAllFs, allowAllNetwork, allowAllChildProcess, allowAllEnv } from "@secure-exec/kernel";
+
+const kernel = createKernel({
+  filesystem: vfs,
+  permissions: allowAll,        // everything allowed
+});
+
+const kernel = createKernel({
+  filesystem: vfs,
+  permissions: {
+    fs: allowAllFs,              // filesystem only
+    network: false,              // block network
+    childProcess: allowAllChildProcess,
+    env: (req) => ["HOME", "PATH"].includes(req.name),
+  },
+});
+```

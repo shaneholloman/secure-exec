@@ -2,6 +2,7 @@
 
 This file tracks the active implementation backlog only.
 Resolved work should stay in `docs-internal/friction.md` instead of remaining here as unchecked debt.
+Keep this file in sync with `docs-internal/spec-hardening.md` — when completing spec items, mark them here too.
 
 Priority order is:
 1. Security and host-protection gaps
@@ -39,9 +40,17 @@ Priority order is:
   - Add explicit stress coverage for `setInterval`, `setImmediate`, and high-frequency event emission so abuse resistance is tested instead of assumed.
   - Files: `tests/test-suite/node/`, `tests/runtime-driver/`
 
-- [ ] Document extension attack vectors and hardening guidance.
+- [x] Document extension attack vectors and hardening guidance. *(done — `docs-internal/attack-vectors.md` is comprehensive)*
   - Consolidate memory amplification, CPU amplification, timer/event amplification, and extension host-hook abuse paths in the internal threat model.
   - Files: `docs-internal/attack-vectors.md`
+
+- [ ] Fix kernel FD table memory leak. *(spec-hardening.md item 1)*
+  - `fdTableManager.remove(pid)` never called on process exit; every spawn leaks an FD table.
+  - Files: `packages/kernel/src/process-table.ts`, `packages/kernel/src/fd-table.ts`
+
+- [ ] Fix WasmVM 1MB SharedArrayBuffer silent truncation. *(spec-hardening.md item 2)*
+  - Reads >1MB silently truncate; should return EIO.
+  - Files: `packages/runtime/wasmvm/src/syscall-rpc.ts`
 
 ## Priority 1: Compatibility and API Coverage
 
@@ -53,21 +62,20 @@ Priority order is:
   - Missing APIs: `cp`, `cpSync`, `glob`, `globSync`, `opendir`, `mkdtemp`, `mkdtempSync`, `statfs`, `statfsSync`, `readv`, `readvSync`, `fdatasync`, `fdatasyncSync`, `fsync`, `fsyncSync`.
   - Files: `packages/secure-exec/src/bridge/fs.ts`
 
-- [ ] Implement deferred `fs` APIs or explicitly keep them out of scope with stronger compatibility guidance.
+- [ ] Implement deferred `fs` APIs in bridge or explicitly scope them out.
   - Deferred APIs: `chmod`, `chown`, `link`, `symlink`, `readlink`, `truncate`, `utimes`, `watch`, `watchFile`.
-  - Files: `packages/secure-exec/src/bridge/fs.ts`, `docs/node-compatability.mdx`
+  - Kernel VFS already defines these in its interface; bridge needs wiring.
+  - Files: `packages/secure-exec/src/bridge/fs.ts`, `docs/nodejs-compatibility.mdx`
 
 - [ ] Add missing lower-level `http` and `https` APIs.
   - Remaining gaps include `Agent` pooling/keep-alive controls, upgrade handling, trailer headers, and socket-level events.
   - Files: `packages/secure-exec/src/bridge/network.ts`, `packages/secure-exec/src/node/driver.ts`
 
-- [ ] Add a dedicated lazy dynamic-import regression test.
-  - Top-level-await plus `import()` ordering still has a tracked edge case and needs explicit coverage.
-  - Files: `packages/secure-exec/tests/`
+- [x] Add a dedicated lazy dynamic-import regression test. *(done — `tests/runtime-driver/node/index.test.ts:622`)*
 
 - [ ] Document and verify package-manager support for `node_modules` loading behavior.
   - Add compatibility fixtures that exercise npm, pnpm, yarn, and bun layouts without sandbox-aware fixture code.
-  - Files: `packages/secure-exec/tests/projects/`, `docs/node-compatability.mdx`
+  - Files: `packages/secure-exec/tests/projects/`, `docs/nodejs-compatibility.mdx`
 
 ## Priority 2: Maintainability and Performance
 
@@ -99,32 +107,47 @@ Priority order is:
   - The current approach does more work than necessary and increases large-file pressure.
   - Files: `packages/secure-exec/src/bridge/fs.ts`
 
-- [ ] Replace magic `O_*` flag numbers with named constants.
-  - Hardcoded flag values are difficult to audit and easy to misuse.
-  - Files: `packages/secure-exec/src/bridge/fs.ts`
+- [x] Replace magic `O_*` flag numbers with named constants. *(done — constants defined at module level in bridge/fs.ts)*
 
 - [ ] Convert IO handling into a shared abstraction reusable across runtimes.
   - Shared request/response/stream/error contracts should reduce Node/browser/runtime drift.
   - Files: `packages/secure-exec/src/`, `tests/test-suite/`
 
+- [ ] Replace WasmVM error string matching with structured error codes. *(spec-hardening.md item 15)*
+  - `mapErrorToErrno()` matches on `error.message` content; should use structured `error.code`.
+  - Files: `packages/runtime/wasmvm/src/kernel-worker.ts`
+
 ## Priority 3: Examples, Validation Breadth, and Product Direction
 
-- [ ] Review the Node driver against the intended long-term runtime contract.
-  - Use the current architecture docs and glossary terms to decide what stays driver-owned versus runtime-owned.
-  - Files: `docs-internal/arch/overview.md`, `docs-internal/glossary.md`, `packages/secure-exec/src/node/`
+- [x] Review the Node driver against the intended long-term runtime contract. *(done — `.agent/contracts/node-runtime.md` and `node-bridge.md` exist)*
 
-- [ ] Define the minimal driver surface needed for Rivet integration.
-  - This should turn the high-level “minimal driver” idea into a concrete API checklist.
-  - Files: `docs-internal/arch/overview.md`, `packages/secure-exec/src/types.ts`
+- [x] Define the minimal driver surface needed for Rivet integration. *(done — `RuntimeDriver` interface in `packages/kernel/src/types.ts`)*
 
 - [ ] Add a codemode example.
   - Provide a focused example that demonstrates secure-exec usage in a realistic tool flow.
   - Files: `examples/`
 
-- [ ] Add a just-bash example.
-  - Show the smallest useful command-execution integration without broader framework scaffolding.
-  - Files: `examples/`
+- [x] Add a just-bash example. *(done — `examples/just-bash/`)*
 
-- [ ] Expand framework and environment validation.
-  - Add or maintain black-box coverage for projects using Pi, Express, Hono, and other representative package stacks.
+- [ ] Expand framework and environment validation. *(spec-hardening.md items 33-35)*
+  - Express fixture, Fastify fixture, pnpm/bun layout fixtures.
   - Files: `packages/secure-exec/tests/projects/`
+
+## Spec-Hardening Cross-References (items 29-42)
+
+Items below are tracked in detail in `docs-internal/spec-hardening.md`. Kept here for backlog visibility.
+
+- [ ] Global host resource budgets (maxOutputBytes, maxTimers, maxChildProcesses, maxBridgeCalls) *(spec item 29)*
+- [ ] Child-process output buffering caps (execSync/spawnSync maxBuffer enforcement) *(spec item 30)*
+- [ ] Missing fs APIs in bridge (cp, glob, opendir, mkdtemp, statfs, readv, fdatasync, fsync) *(spec item 31)*
+- [ ] Wire deferred fs APIs through bridge (chmod, chown, symlink, readlink, link, truncate, utimes) *(spec item 32)*
+- [ ] Express project-matrix fixture *(spec item 33)*
+- [ ] Fastify project-matrix fixture *(spec item 34)*
+- [ ] Package manager layout fixtures (pnpm, bun) *(spec item 35)*
+- [ ] Remove @ts-nocheck from 5 bridge files *(spec item 36)*
+- [ ] Fix v8.serialize/deserialize structured clone semantics *(spec item 37)*
+- [ ] HTTP Agent pooling, upgrade, and trailer APIs *(spec item 38)*
+- [ ] Codemod example *(spec item 39)*
+- [ ] Split NodeExecutionDriver into focused modules *(spec item 40)*
+- [ ] ESM module reverse lookup O(1) *(spec item 41)*
+- [ ] Resolver memoization *(spec item 42)*

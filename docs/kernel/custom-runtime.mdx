@@ -1,0 +1,282 @@
+---
+title: Writing a Custom RuntimeDriver
+description: Implement the RuntimeDriver interface to add a new language runtime to the kernel.
+icon: "puzzle-piece"
+---
+
+A `RuntimeDriver` is a pluggable execution engine. The kernel routes commands to drivers based on the command registry. You can write a custom driver for any language or tool.
+
+## The RuntimeDriver interface
+
+```ts
+interface RuntimeDriver {
+  /** Unique name for this driver (e.g., "ruby", "deno"). */
+  name: string;
+
+  /** Commands this driver handles (e.g., ["ruby", "irb", "gem"]). */
+  commands: string[];
+
+  /** Called once when mounting. Receive the KernelInterface for syscalls. */
+  init(kernel: KernelInterface): Promise<void>;
+
+  /** Spawn a process. Must return synchronously. */
+  spawn(command: string, args: string[], ctx: ProcessContext): DriverProcess;
+
+  /** Clean up all resources. Called during kernel.dispose(). */
+  dispose(): Promise<void>;
+}
+```
+
+## Minimal example: echo driver
+
+A driver that handles one command (`myecho`) and writes args to stdout:
+
+```ts
+import type {
+  RuntimeDriver,
+  KernelInterface,
+  ProcessContext,
+  DriverProcess,
+} from "@secure-exec/kernel";
+
+function createEchoDriver(): RuntimeDriver {
+  let kernel: KernelInterface | null = null;
+
+  return {
+    name: "echo-driver",
+    commands: ["myecho"],
+
+    async init(ki: KernelInterface) {
+      kernel = ki;
+    },
+
+    spawn(command: string, args: string[], ctx: ProcessContext): DriverProcess {
+      if (!kernel) throw new Error("Driver not initialized");
+
+      const output = args.join(" ") + "\n";
+      const encoded = new TextEncoder().encode(output);
+
+      // Resolve exit asynchronously (kernel expects this)
+      let exitResolve: (code: number) => void;
+      const exitPromise = new Promise<number>((r) => { exitResolve = r; });
+
+      const driverProcess: DriverProcess = {
+        writeStdin(_data: Uint8Array) { /* ignore stdin */ },
+        closeStdin() { /* no-op */ },
+        kill(_signal: number) { exitResolve!(128 + _signal); },
+        wait() { return exitPromise; },
+        onExit: null,
+        onStdout: null,
+        onStderr: null,
+      };
+
+      // Emit output on next microtask (after kernel wires callbacks)
+      queueMicrotask(() => {
+        driverProcess.onStdout?.(encoded);
+        exitResolve!(0);
+        driverProcess.onExit?.(0);
+      });
+
+      return driverProcess;
+    },
+
+    async dispose() {
+      kernel = null;
+    },
+  };
+}
+```
+
+Mount and use it:
+
+```ts
+import { createKernel } from "@secure-exec/kernel";
+import { createInMemoryFileSystem } from "@secure-exec/os-browser";
+
+const kernel = createKernel({ filesystem: createInMemoryFileSystem() });
+await kernel.mount(createEchoDriver());
+
+const result = await kernel.exec("myecho hello world");
+console.log(result.stdout); // "hello world\n"
+
+await kernel.dispose();
+```
+
+## DriverProcess lifecycle
+
+`spawn()` must return a `DriverProcess` **synchronously**. The process runs asynchronously.
+
+```ts
+spawn(command, args, ctx): DriverProcess {
+  let exitResolve: (code: number) => void;
+  const exitPromise = new Promise<number>((r) => { exitResolve = r; });
+
+  const proc: DriverProcess = {
+    writeStdin(data) { /* deliver to process */ },
+    closeStdin()     { /* signal EOF */ },
+    kill(signal)     { exitResolve(128 + signal); },
+    wait()           { return exitPromise; },
+    onExit: null,    // kernel sets this after spawn returns
+    onStdout: null,  // kernel sets this after spawn returns
+    onStderr: null,  // kernel sets this after spawn returns
+  };
+
+  // Start async work — emit output via callbacks
+  queueMicrotask(() => {
+    proc.onStdout?.(new TextEncoder().encode("output\n"));
+    exitResolve(0);
+    proc.onExit?.(0);
+  });
+
+  return proc;
+}
+```
+
+<Info>
+The kernel attaches `onStdout`, `onStderr`, and `onExit` callbacks **after** `spawn()` returns. If you emit data synchronously during `spawn()`, use the `ctx.onStdout`/`ctx.onStderr` callbacks from `ProcessContext` instead — the kernel buffers data from both paths.
+</Info>
+
+### Callback timing
+
+| When | Use | Why |
+|---|---|---|
+| During `spawn()` (sync) | `ctx.onStdout(data)` | `DriverProcess.onStdout` isn't set yet |
+| After `spawn()` returns (async) | `proc.onStdout?.(data)` | Kernel has wired callbacks |
+
+Both paths work. The kernel buffers and replays data if callbacks are attached late.
+
+## Using KernelInterface syscalls
+
+Your driver receives a `KernelInterface` during `init()`. Use it for filesystem access, process spawning, and pipes.
+
+### Read/write files
+
+```ts
+async init(ki: KernelInterface) {
+  this.kernel = ki;
+}
+
+spawn(command, args, ctx) {
+  // Read a file from the shared VFS
+  const content = await this.kernel.vfs.readFile("/app/config.json");
+
+  // Write a file
+  await this.kernel.vfs.writeFile("/tmp/output.txt", "result");
+}
+```
+
+### Spawn child processes (cross-runtime)
+
+This is the critical integration point. When your runtime needs to run a command handled by another driver, call `kernel.spawn()`:
+
+```ts
+spawn(command, args, ctx) {
+  // Your runtime wants to run "grep" — routes to WasmVM driver
+  const child = this.kernel.spawn("grep", ["-r", "TODO", "/app"], {
+    ppid: ctx.pid,
+    env: ctx.env,
+    cwd: ctx.cwd,
+    onStdout: (data) => { /* forward to parent */ },
+  });
+
+  const exitCode = await child.wait();
+}
+```
+
+### Create pipes
+
+```ts
+spawn(command, args, ctx) {
+  const { readFd, writeFd } = this.kernel.pipe(ctx.pid);
+
+  // Spawn writer with stdout → pipe
+  const writer = this.kernel.spawn("echo", ["hello"], {
+    ppid: ctx.pid,
+    stdoutFd: writeFd,
+  });
+
+  // Read from pipe
+  const data = await this.kernel.fdRead(ctx.pid, readFd, 4096);
+
+  // Clean up parent's copies
+  this.kernel.fdClose(ctx.pid, readFd);
+  this.kernel.fdClose(ctx.pid, writeFd);
+}
+```
+
+### FD operations
+
+```ts
+// Open file → FD
+const fd = this.kernel.fdOpen(ctx.pid, "/tmp/file.txt", O_RDONLY, 0);
+
+// Read
+const bytes = await this.kernel.fdRead(ctx.pid, fd, 1024);
+
+// Write
+const written = this.kernel.fdWrite(ctx.pid, fd, encoded);
+
+// Seek
+const newPos = this.kernel.fdSeek(ctx.pid, fd, 0n, SEEK_SET);
+
+// Close
+this.kernel.fdClose(ctx.pid, fd);
+```
+
+## Testing your driver
+
+Use `createKernel` directly in tests with your driver:
+
+```ts
+import { describe, it, expect, afterEach } from "vitest";
+import { createKernel } from "@secure-exec/kernel";
+import { createInMemoryFileSystem } from "@secure-exec/os-browser";
+
+describe("MyDriver", () => {
+  let kernel;
+
+  afterEach(async () => {
+    await kernel?.dispose();
+  });
+
+  it("handles myecho command", async () => {
+    const vfs = createInMemoryFileSystem();
+    kernel = createKernel({ filesystem: vfs });
+    await kernel.mount(createEchoDriver());
+
+    const result = await kernel.exec("myecho hello");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("hello\n");
+  });
+
+  it("coexists with WasmVM", async () => {
+    const vfs = createInMemoryFileSystem();
+    kernel = createKernel({ filesystem: vfs });
+    await kernel.mount(createWasmVmRuntime({ wasmBinaryPath: "..." }));
+    await kernel.mount(createEchoDriver());
+
+    // myecho routes to your driver
+    const r1 = await kernel.exec("myecho test");
+    expect(r1.stdout).toBe("test\n");
+
+    // cat still routes to WasmVM
+    await kernel.writeFile("/tmp/f.txt", "data");
+    const r2 = await kernel.exec("cat /tmp/f.txt");
+    expect(r2.stdout).toBe("data");
+  });
+});
+```
+
+## Checklist
+
+Before shipping your driver:
+
+- `name` is unique and descriptive
+- `commands` lists every command you handle
+- `spawn()` returns synchronously (async work on microtask/setTimeout)
+- `dispose()` cleans up all workers/processes/resources
+- `init()` throws if called twice without dispose
+- `spawn()` throws if called before `init()`
+- `kill(signal)` resolves the exit promise with `128 + signal`
+- `onExit` callback is invoked exactly once
+- Tested with and without other drivers mounted
