@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import { ArrowRight, Terminal, Check } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { ArrowRight, Terminal, Check, ChevronDown } from "lucide-react";
 import { CopyButton } from "./ui/CopyButton";
+import { LightningBackground } from "./ui/LightningBackground";
 
 const codeRaw = `import { generateText, tool } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -37,8 +38,8 @@ const result = await generateText({
 
 function CodeBlock() {
   return (
-    <div className="overflow-hidden rounded-xl border border-white/10 bg-[#0c0c0e] shadow-2xl">
-      <div className="flex items-center justify-between border-b border-white/10 bg-white/5 px-4 py-2.5">
+    <div className="overflow-hidden rounded-xl bg-[#0c0c0e] shadow-2xl chrome-gradient-border" style={{ "--chrome-angle": "240deg" } as React.CSSProperties}>
+      <div className="flex items-center justify-between bg-white/5 px-4 py-2.5 chrome-divider">
         <span className="text-xs font-medium text-zinc-500">agent.ts</span>
         <CopyButton text={codeRaw} />
       </div>
@@ -216,7 +217,8 @@ const CopyInstallButton = () => {
   return (
     <button
       onClick={handleCopy}
-      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md btn-chrome-outline px-4 py-2.5 text-sm transition-all font-mono"
+      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md btn-chrome-outline px-4 py-2.5 text-sm font-mono"
+      style={{ "--chrome-angle": "300deg" } as React.CSSProperties}
     >
       {copied ? <Check className="h-4 w-4 text-green-400" /> : <Terminal className="h-4 w-4 flex-shrink-0" />}
       <span>{installCommand}</span>
@@ -224,30 +226,160 @@ const CopyInstallButton = () => {
   );
 };
 
+function AmbientSparkles() {
+  const [sparkles, setSparkles] = useState<{ id: number; x: number; y: number; size: number; duration: number }[]>([]);
+  const idRef = useRef(0);
+
+  useEffect(() => {
+    const tick = () => {
+      const id = idRef.current++;
+      const sparkle = {
+        id,
+        x: Math.random() * 100,
+        y: Math.random() * 100,
+        size: 14 + Math.random() * 28,
+        duration: 1 + Math.random() * 2,
+      };
+      setSparkles((prev) => [...prev, sparkle]);
+      setTimeout(() => {
+        setSparkles((prev) => prev.filter((s) => s.id !== id));
+      }, sparkle.duration * 1000 + 300);
+      timer = setTimeout(tick, 150 + Math.random() * 400);
+    };
+    let timer = setTimeout(tick, 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none overflow-hidden">
+      <AnimatePresence>
+        {sparkles.map((s) => (
+          <div key={s.id} className="absolute" style={{ left: `${s.x}%`, top: `${s.y}%` }}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0 }}
+              animate={{ opacity: 0.6, scale: 1 }}
+              exit={{ opacity: 0, scale: 0 }}
+              transition={{ duration: s.duration * 0.4, ease: "easeOut" }}
+              style={{ marginLeft: -s.size / 2, marginTop: -s.size / 2 }}
+            >
+              <svg width={s.size} height={s.size} viewBox="0 0 24 24" fill="none" style={{ filter: "blur(0.5px)" }}>
+                <path
+                  d="M12 0 L12.4 11 L24 12 L12.4 13 L12 24 L11.6 13 L0 12 L11.6 11 Z"
+                  fill="white"
+                  opacity="0.7"
+                />
+              </svg>
+            </motion.div>
+          </div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// Sparkle positions mapped from red dots on the logo (% of logo dimensions)
+const sparklePoints = [
+  { x: 5.8, y: 43 },    // S top
+  { x: 20, y: 31.5 },   // E top (SECURE)
+  { x: 34.7, y: 29 },   // C top
+  { x: 40.1, y: 38 },   // U/R junction
+  { x: 67, y: 22 },     // R/E top
+  { x: 96.5, y: 15 },   // E tip (SECURE end)
+  { x: 19.1, y: 79 },   // E bottom (EXEC)
+  { x: 23.2, y: 91 },   // X bottom
+  { x: 32.2, y: 79.5 }, // E bottom (EXEC middle)
+  { x: 48.2, y: 79.5 }, // C bottom
+  { x: 77.3, y: 84 },   // right of EXEC
+];
+
+interface Sparkle {
+  id: number;
+  x: number;
+  y: number;
+  size: number;
+  duration: number;
+}
+
+function LogoSparkles() {
+  const [sparkles, setSparkles] = useState<Sparkle[]>([]);
+  const idCounterRef = useRef(0);
+  const lastIndexRef = useRef(-1);
+
+  const spawnSparkle = useCallback(() => {
+    // Pick a random point that isn't the same as the last one
+    let idx = Math.floor(Math.random() * sparklePoints.length);
+    if (idx === lastIndexRef.current) {
+      idx = (idx + 1 + Math.floor(Math.random() * (sparklePoints.length - 1))) % sparklePoints.length;
+    }
+    lastIndexRef.current = idx;
+    const point = sparklePoints[idx];
+
+    const id = idCounterRef.current++;
+    const sparkle: Sparkle = {
+      id,
+      x: point.x + (Math.random() - 0.5) * 4,
+      y: point.y + (Math.random() - 0.5) * 4,
+      size: 50 + Math.random() * 60,
+      duration: 0.15 + Math.random() * 0.2,
+    };
+    setSparkles((prev) => [...prev, sparkle]);
+    setTimeout(() => {
+      setSparkles((prev) => prev.filter((s) => s.id !== id));
+    }, sparkle.duration * 1000 + 100);
+  }, []);
+
+  useEffect(() => {
+    const tick = () => {
+      spawnSparkle();
+      const delay = 300 + Math.random() * 1200;
+      timer = setTimeout(tick, delay);
+    };
+    let timer = setTimeout(tick, 2000);
+    return () => clearTimeout(timer);
+  }, [spawnSparkle]);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10">
+      <AnimatePresence>
+        {sparkles.map((s) => (
+          <div
+            key={s.id}
+            className="absolute"
+            style={{ left: `${s.x}%`, top: `${s.y}%` }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8, rotate: 0 }}
+              animate={{ opacity: 1, scale: 1, rotate: 1080 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              transition={{ duration: s.duration, ease: "linear" }}
+              style={{ marginLeft: -s.size / 2, marginTop: -s.size / 2 }}
+            >
+              <svg width={s.size} height={s.size} viewBox="0 0 24 24" fill="none" style={{ filter: "blur(0.5px)" }}>
+                <path
+                  d="M12 0 L12.15 11.4 L24 12 L12.15 12.6 L12 24 L11.85 12.6 L0 12 L11.85 11.4 Z"
+                  fill="white"
+                  opacity="0.9"
+                />
+              </svg>
+            </motion.div>
+          </div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export function Hero() {
-  const [scrollOpacity, setScrollOpacity] = useState(1);
+  const [scrollY, setScrollY] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
     const updateViewportMode = () => {
-      const mobile = window.innerWidth < 1024;
-      setIsMobile(mobile);
-      if (mobile) {
-        setScrollOpacity(1);
-      }
+      setIsMobile(window.innerWidth < 1024);
     };
 
     const handleScroll = () => {
-      if (window.innerWidth < 1024) {
-        setScrollOpacity(1);
-        return;
-      }
-      const scrollY = window.scrollY;
-      const windowHeight = window.innerHeight;
-      const fadeStart = windowHeight * 0.15;
-      const fadeEnd = windowHeight * 0.5;
-      const opacity = 1 - Math.min(1, Math.max(0, (scrollY - fadeStart) / (fadeEnd - fadeStart)));
-      setScrollOpacity(opacity);
+      setScrollY(window.scrollY);
     };
 
     updateViewportMode();
@@ -263,72 +395,95 @@ export function Hero() {
   return (
     <>
       <section className="relative flex min-h-screen flex-col overflow-hidden">
+        <div className="absolute inset-0 bg-[#09090b] pointer-events-none" />
         <div
-          className="absolute inset-0 bg-cover bg-center bg-no-repeat pointer-events-none"
-          style={{ backgroundImage: "url('/hero-bg.jpg')", opacity: 0.15 }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-b from-[#09090b]/60 via-[#09090b]/40 to-[#09090b] pointer-events-none" />
+          className="absolute inset-0"
+          style={isMobile ? undefined : { transform: `translateY(${scrollY * 0.15}px)` }}
+        >
+          <LightningBackground />
+        </div>
+        <AmbientSparkles />
 
         <div
-          className="flex flex-1 flex-col justify-start pt-32 lg:justify-center lg:pt-0 px-6"
-          style={isMobile ? undefined : { opacity: scrollOpacity, filter: `blur(${(1 - scrollOpacity) * 8}px)` }}
+          className="flex flex-1 flex-col justify-center px-6"
+          style={undefined}
         >
           <div className="mx-auto w-full max-w-4xl text-center">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 1.2, ease: "easeOut" }}
-              className="mb-12 md:mb-16 flex justify-center"
+              className="flex justify-center"
+              style={isMobile ? undefined : { transform: `translateY(${scrollY * -0.25}px)` }}
             >
-              <img
-                id="hero-logo"
-                src="/secure-exec-logo.png"
-                alt="Secure Exec"
-                className="h-48 sm:h-56 md:h-72 lg:h-80 w-auto drop-shadow-[0_0_60px_rgba(14,165,164,0.15)]"
-              />
+              <div className="relative inline-block">
+                <div className="absolute inset-0 -inset-x-20 -inset-y-10 bg-[radial-gradient(ellipse_at_center,rgba(180,200,255,0.06)_0%,transparent_70%)]" />
+                <div className="relative inline-block">
+                  <img
+                    id="hero-logo"
+                    src="/secure-exec-logo.png"
+                    alt="Secure Exec"
+                    className="relative h-56 sm:h-72 md:h-96 lg:h-[28rem] w-auto drop-shadow-[0_0_60px_rgba(14,165,164,0.15)]"
+                  />
+                  <LogoSparkles />
+                </div>
+              </div>
             </motion.div>
 
-            <motion.h1
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7, delay: 0.5, ease: [0.16, 1, 0.3, 1] }}
-              className="mb-6 text-2xl font-bold leading-[1.15] uppercase tracking-[0.05em] sm:text-3xl md:text-[2.8rem] lg:text-5xl"
-              style={{ fontFamily: "'Cinzel', serif", color: "#CC0000" }}
-            >
-              Secure Node.js Execution
-              <br />
-              Without a Sandbox
-            </motion.h1>
-
-            <motion.p
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.7 }}
-              className="mx-auto mb-10 max-w-xl md:max-w-2xl text-lg text-zinc-500 leading-relaxed"
-            >
-              Supports Node.js and npm packages natively.
-              <br />
-              Just a library. No containers, no VMs, no external services.
-              <br />
-              Powered by the same V8 isolate technology behind Cloudflare Workers and Chrome.
-            </motion.p>
-
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.9 }}
-              className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center"
-            >
-              <a
-                href="/docs"
-                className="selection-dark inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md btn-chrome px-5 py-2.5 text-sm transition-all"
+            <div className="mt-16 md:mt-20" style={isMobile ? undefined : { transform: `translateY(${scrollY * -0.4}px)` }}>
+              <motion.h1
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.7, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                className="mb-6 text-2xl font-semibold leading-[1.15] tracking-tight text-white"
+                style={{ fontFamily: "'Inter', sans-serif" }}
               >
-                Get Started
-                <ArrowRight className="h-4 w-4" />
-              </a>
-              <CopyInstallButton />
-            </motion.div>
+                Secure Node.js Execution Without a Sandbox
+              </motion.h1>
+
+              <motion.p
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6, delay: 0.7 }}
+                className="mx-auto mb-10 max-w-2xl text-lg text-zinc-500 leading-relaxed"
+              >
+                <span className="whitespace-nowrap">A lightweight library for secure Node.js execution using V8 isolates.</span>
+                <br />
+                <span className="whitespace-nowrap">No containers, no VMs — just npm-compatible sandboxing out of the box.</span>
+              </motion.p>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.9 }}
+                className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center"
+              >
+                <a
+                  href="/docs"
+                  className="selection-dark inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md btn-chrome px-5 py-2.5 text-sm"
+                  style={{ "--chrome-angle": "170deg" } as React.CSSProperties}
+                >
+                  Get Started
+                  <ArrowRight className="h-4 w-4" />
+                </a>
+                <CopyInstallButton />
+              </motion.div>
+            </div>
           </div>
+
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 1, delay: 1.5 }}
+            className="mt-16 flex justify-center"
+          >
+            <motion.div
+              animate={{ y: [0, 6, 0] }}
+              transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+            >
+              <ChevronDown className="h-5 w-5 text-zinc-600" />
+            </motion.div>
+          </motion.div>
         </div>
       </section>
 
@@ -341,7 +496,7 @@ export function Hero() {
             transition={{ duration: 0.6 }}
             className="text-center mb-8"
           >
-            <h2 className="text-2xl font-semibold text-white mb-3">Give your AI agent a secure sandbox</h2>
+            <h2 className="text-2xl font-semibold text-white mb-3">Give your AI agent secure code execution</h2>
             <p className="text-zinc-500 max-w-lg mx-auto">
               Expose secure-exec as a tool with the Vercel AI SDK. Your agent can execute arbitrary code without risking your infrastructure.
             </p>

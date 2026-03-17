@@ -45,7 +45,7 @@ const structuredData = {
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Cinzel:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Cinzel:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
 
     <title>{title}</title>
 
@@ -65,6 +65,39 @@ const structuredData = {
   </head>
   <body class="min-h-screen bg-background text-foreground antialiased">
     <slot />
+    <script>
+      // Chrome border scroll effects:
+      // 1. Rotate gradient clockwise on scroll-down (fast at edges, slow at center)
+      // 2. Brighter/shinier near page center, darker near top/bottom
+      {
+        const K = 0.6;
+        const TWO_PI = Math.PI * 2;
+        const BRIGHT_MIN = 0.35;
+        const BRIGHT_MAX = 1.2;
+        let ticking = false;
+        const update = () => {
+          const scrollY = window.scrollY;
+          const pageHeight = document.documentElement.scrollHeight - window.innerHeight;
+          const t = pageHeight > 0 ? scrollY / pageHeight : 0;
+          const eased = t + K * Math.sin(TWO_PI * t) / TWO_PI;
+          const degrees = eased * 360;
+          const brightness = BRIGHT_MIN + (BRIGHT_MAX - BRIGHT_MIN) * Math.sin(Math.PI * t);
+          const root = document.documentElement.style;
+          const dividerOffset = (1 - t) * 100;
+          root.setProperty("--chrome-scroll-offset", `${degrees}deg`);
+          root.setProperty("--chrome-brightness", `${brightness}`);
+          root.setProperty("--chrome-divider-offset", `${dividerOffset}%`);
+          ticking = false;
+        };
+        window.addEventListener("scroll", () => {
+          if (!ticking) {
+            requestAnimationFrame(update);
+            ticking = true;
+          }
+        }, { passive: true });
+        update();
+      }
+    </script>
   </body>
 </html>
 

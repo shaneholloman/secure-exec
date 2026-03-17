@@ -67,8 +67,8 @@ export function Navigation() {
                   <img src="/rivet-icon.svg" alt="Rivet" className="size-8" />
                 </a>
                 <span className="text-white/20">|</span>
-                <a href="/" className="flex items-center">
-                  <img src="/secure-exec-logo-long.svg" alt="Secure Exec" className="h-6 w-auto" />
+                <a href="/" className="flex items-center text-sm font-medium text-white">
+                  Secure Exec
                 </a>
               </div>
 

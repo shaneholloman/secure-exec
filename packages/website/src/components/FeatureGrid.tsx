@@ -10,6 +10,7 @@ const features = [
     description:
       "No Docker daemon, no hypervisor, no orchestrator. Runs anywhere Node.js, Bun, or an HTML5 browser runs. Deploy to Lambda, a VPS, or a static site — your existing deployment works.",
     hoverColor: "group-hover:text-blue-400",
+    chromeAngle: "110deg",
   },
   {
     icon: Package,
@@ -18,6 +19,7 @@ const features = [
       "fs, child_process, http, dns, process, os — bridged to real host capabilities, not stubbed. Run Express, Hono, Next.js, and any npm package.",
     hoverColor: "group-hover:text-green-400",
     link: { href: "/docs/node-compatability", label: "Compatibility matrix" },
+    chromeAngle: "200deg",
   },
   {
     icon: Shield,
@@ -25,6 +27,7 @@ const features = [
     description:
       "Filesystem, network, child processes, and env vars are all blocked unless explicitly allowed. Permissions are composable functions — grant read but not write, allow fetch but block spawn.",
     hoverColor: "group-hover:text-purple-400",
+    chromeAngle: "320deg",
   },
   {
     icon: Gauge,
@@ -32,6 +35,7 @@ const features = [
     description:
       "CPU time budgets and memory caps. Runaway code is terminated deterministically with exit code 124 — no OOM crashes, no infinite loops, no host exhaustion.",
     hoverColor: "group-hover:text-amber-400",
+    chromeAngle: "45deg",
   },
   {
     icon: Cpu,
@@ -39,6 +43,7 @@ const features = [
     description:
       "No container to boot, no filesystem image to mount, no process to fork. Isolate creation is measured in milliseconds. Memory overhead is measured in single-digit megabytes.",
     hoverColor: "group-hover:text-pink-400",
+    chromeAngle: "260deg",
   },
   {
     icon: Globe,
@@ -46,6 +51,7 @@ const features = [
     description:
       "The same isolation primitive behind Cloudflare Workers for Platforms and every browser tab. Battle-tested at scale by the infrastructure you already trust.",
     hoverColor: "group-hover:text-orange-400",
+    chromeAngle: "160deg",
   },
 ];
 
@@ -60,6 +66,7 @@ export function FeatureGrid() {
             viewport={{ once: true }}
             transition={{ duration: 0.5 }}
             className="mb-2 text-2xl font-normal tracking-tight text-white md:text-4xl"
+            style={{ fontFamily: "'Inter', sans-serif" }}
           >
             Why Secure Exec
           </motion.h2>
@@ -84,7 +91,8 @@ export function FeatureGrid() {
           {features.map((feature) => (
             <div
               key={feature.title}
-              className="group flex flex-col gap-4 rounded-xl border border-white/10 bg-white/[0.02] p-6 transition-colors hover:border-white/20"
+              className="group flex flex-col gap-4 rounded-xl p-6 chrome-gradient-border chrome-hover"
+              style={{ "--chrome-angle": feature.chromeAngle } as React.CSSProperties}
             >
               <div className="flex items-center gap-3">
                 <div className={`text-zinc-500 transition-colors ${feature.hoverColor}`}>
