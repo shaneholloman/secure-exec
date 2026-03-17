@@ -537,24 +537,32 @@ describe('Node RuntimeDriver', () => {
       expect(output).not.toContain('FAIL:no-error');
     });
 
-    it('spawning multiple child processes each gets unique kernel PID', async () => {
+    it('concurrent child process spawning assigns unique PIDs', async () => {
       const vfs = new SimpleVFS();
       kernel = createKernel({ filesystem: vfs as any });
 
-      // Mount mock driver for bash+echo (bridge wraps execSync as bash -c '...')
-      const mockDriver = new MockRuntimeDriver(['bash', 'echo'], {
+      // Spy driver records child PIDs assigned by the kernel
+      const childPids: number[] = [];
+      const spyDriver = new MockRuntimeDriver(['echo'], {
         echo: { exitCode: 0, stdout: 'ok' },
       });
-      await kernel.mount(mockDriver);
+      const originalSpawn = spyDriver.spawn.bind(spyDriver);
+      spyDriver.spawn = (command: string, args: string[], ctx: ProcessContext): DriverProcess => {
+        childPids.push(ctx.pid);
+        return originalSpawn(command, args, ctx);
+      };
+
+      await kernel.mount(spyDriver);
       await kernel.mount(createNodeRuntime());
 
-      // Spawn 5 child processes via child_process.execSync, collect PIDs
+      // Spawn 12 child processes via spawnSync — each routed through kernel
       const chunks: Uint8Array[] = [];
       const proc = kernel.spawn('node', ['-e', `
-        const { execSync } = require('child_process');
+        const { spawnSync } = require('child_process');
         const results = [];
-        for (let i = 0; i < 5; i++) {
-          try { execSync('echo ' + i); results.push('ok'); } catch (e) { results.push('err'); }
+        for (let i = 0; i < 12; i++) {
+          const r = spawnSync('echo', [String(i)]);
+          results.push(r.status === 0 ? 'ok' : 'err');
         }
         console.log(results.join(','));
       `], {
@@ -564,8 +572,12 @@ describe('Node RuntimeDriver', () => {
       const output = chunks.map(c => new TextDecoder().decode(c)).join('');
 
       expect(code).toBe(0);
-      // All 5 child processes must complete successfully
-      expect(output).toContain('ok,ok,ok,ok,ok');
+      expect(output).toContain('ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,ok');
+
+      // Spy proves each child got a unique PID from kernel process table
+      expect(childPids.length).toBe(12);
+      const uniquePids = new Set(childPids);
+      expect(uniquePids.size).toBe(12);
     });
   });
 });
