@@ -958,7 +958,7 @@
         "Tests pass"
       ],
       "priority": 56,
-      "passes": false,
+      "passes": true,
       "notes": "Phase 2a. execution.ts ExecutionRuntime interface uses ivm.Isolate, ivm.Context, ivm.Module, ivm.Reference throughout \u2014 fully V8-specific."
     },
     {

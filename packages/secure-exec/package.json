@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@secure-exec/core": "workspace:*",
+    "@secure-exec/node": "workspace:*",
     "buffer": "^6.0.3",
     "esbuild": "^0.27.1",
     "isolated-vm": "^6.0.0",

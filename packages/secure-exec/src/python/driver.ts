@@ -4,7 +4,7 @@ import { Worker } from "node:worker_threads";
 import {
 	TIMEOUT_ERROR_MESSAGE,
 	TIMEOUT_EXIT_CODE,
-} from "../isolate.js";
+} from "@secure-exec/core";
 import {
 	createFsStub,
 	createNetworkStub,
