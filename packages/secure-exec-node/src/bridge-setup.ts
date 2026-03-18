@@ -240,6 +240,7 @@ export async function setupRequire(
 	{
 		const fs = deps.filesystem;
 		const base64Limit = deps.bridgeBase64TransferLimitBytes;
+		const fsJsonPayloadLimit = deps.isolateJsonPayloadLimitBytes;
 
 		// Create individual References for each fs operation
 		const readFileRef = new ivm.Reference(async (path: string) => {
@@ -280,8 +281,10 @@ export async function setupRequire(
 		const readDirRef = new ivm.Reference(async (path: string) => {
 			checkBridgeBudget(deps);
 			const entries = await fs.readDirWithTypes(path);
-			// Return as JSON string for transfer
-			return JSON.stringify(entries);
+			// Validate payload size before transfer
+			const json = JSON.stringify(entries);
+			assertTextPayloadSize(`fs.readDir ${path}`, json, fsJsonPayloadLimit);
+			return json;
 		});
 		const mkdirRef = new ivm.Reference(async (path: string) => {
 			checkBridgeBudget(deps);
@@ -594,7 +597,11 @@ export async function setupRequire(
 				}>("network.fetch options", optionsJson, jsonPayloadLimit);
 				return adapter
 					.fetch(url, options)
-					.then((result) => JSON.stringify(result));
+					.then((result) => {
+						const json = JSON.stringify(result);
+						assertTextPayloadSize("network.fetch response", json, jsonPayloadLimit);
+						return json;
+					});
 			},
 		);
 
@@ -618,7 +625,11 @@ export async function setupRequire(
 				}>("network.httpRequest options", optionsJson, jsonPayloadLimit);
 				return adapter
 					.httpRequest(url, options)
-					.then((result) => JSON.stringify(result));
+					.then((result) => {
+						const json = JSON.stringify(result);
+						assertTextPayloadSize("network.httpRequest response", json, jsonPayloadLimit);
+						return json;
+					});
 			},
 		);
 
