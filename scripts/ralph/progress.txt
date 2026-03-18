@@ -1416,6 +1416,17 @@ PRD: ralph/kernel-hardening (46 stories)
   - None new — patterns already documented
 ---
 
+## 2026-03-18 - US-136
+- Already implemented in prior iteration: error message sanitization for module access and HTTP handlers
+- Tests pass in bridge-hardening.test.ts and module-access.test.ts
+- Marked passes: true in prd.json
+---
+
+## 2026-03-18 - US-137, US-138, US-104 (p110), US-105 (p111)
+- All already implemented in prior iterations (feat commits in git log)
+- Batch-marked passes: true in prd.json
+---
+
 ## 2026-03-18 - US-135
 - Already implemented: command registry override warnings, /dev/zero write no-op, device realpath, /dev/fd/N parsing validation
 - Tests already exist in command-registry.test.ts, device-layer.test.ts, kernel-integration.test.ts
