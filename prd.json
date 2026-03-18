@@ -2020,7 +2020,7 @@
         "Tests pass"
       ],
       "priority": 120,
-      "passes": false,
+      "passes": true,
       "notes": "Phase 3 of terminal-e2e-testing.md spec. Known risk: cross-runtime stdout routing through proc_spawn \u2192 kernel \u2192 PTY has known issues \u2014 if tests fail, fix is in spawn/stdio wiring, not test infrastructure. Adversarial review added: ^C during cross-runtime spawn \u2014 signal must reach correct process and shell must survive."
     },
     {
