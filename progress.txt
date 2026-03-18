@@ -1118,3 +1118,22 @@ PRD: ralph/kernel-hardening (46 stories)
   - createNodeDriver({ useDefaultNetwork: true }) without permissions → fetch EACCES (deny-by-default)
   - test-suite context (node.test.ts) always creates with allowAllNetwork — can't test network denial there; use runtime-driver tests instead
 ---
+
+## 2026-03-17 - US-068
+- Implemented sandbox escape security tests proving known escape techniques are blocked
+- Files changed:
+  - packages/secure-exec/tests/runtime-driver/node/sandbox-escape.test.ts (new)
+- Tests verify:
+  - process.binding() returns inert stubs (empty objects), not real native bindings
+  - process.dlopen() throws "not supported" inside sandbox
+  - constructor.constructor('return this')() returns sandbox global, not host global
+  - Object.prototype.__proto__ manipulation stays isolated (setPrototypeOf on Object.prototype throws, no cross-execution proto leakage)
+  - require('v8').runInDebugContext is undefined (v8 module is an empty stub)
+  - Combined stress test: Function constructor, eval, indirect eval, vm.runInThisContext, and arguments.callee.caller all fail to escape
+- **Learnings for future iterations:**
+  - process.binding() returns stub objects for common bindings (fs, buffer, etc.) but stubs are empty — no real native methods
+  - v8 module is an empty object via _moduleCache?.v8 || {} in ESM wrapper
+  - vm.runInThisContext('this') returns a context reference that differs from globalThis but is still within the sandbox (no host bindings available)
+  - When testing optional-chain calls like g?.process?.dlopen?.(), be careful: if dlopen is undefined, the call returns undefined without throwing — test for function existence separately from call behavior
+  - Object.setPrototypeOf(Object.prototype, ...) throws in the sandbox (immutable prototype exotic object)
+---
