@@ -1477,3 +1477,17 @@ PRD: ralph/kernel-hardening (46 stories)
   - Bridge-side exec() wraps spawn() which goes through host bridge; testing exec callback behavior requires the full bridge stack, not just mock CommandExecutor
   - Mock CommandExecutor only affects spawnSync and spawn paths, not bridge-side exec() which creates its own ChildProcess
 ---
+
+## 2026-03-18 - US-126
+- Implemented bridge-side FD table limit (MAX_BRIDGE_FDS = 1024) in fs.ts openSync — throws EMFILE when exceeded
+- Added maxListeners enforcement with warnings to process EventEmitter, ChildProcess, and OutputStreamStub (stdout/stderr)
+- setMaxListeners/getMaxListeners now actually store and return the configured value (was no-op/hardcoded 10)
+- Exceeding maxListeners emits MaxListenersExceededWarning (matching Node.js behavior — warn, don't crash)
+- Files changed: bridge/fs.ts, bridge/child-process.ts, bridge/process.ts, bridge-hardening.test.ts
+- **Learnings for future iterations:**
+  - Bridge FD table is separate from kernel FD table — bridge-side limits prevent resource exhaustion within a single execution
+  - Error properties (code, errno) from bridge-side createFsError DO survive inside the isolate (they're set on the Error object in-isolate)
+  - Error properties from host-thrown errors (via applySyncPromise) do NOT survive — only message and stack cross the boundary
+  - Testing FD exhaustion requires pre-populating VFS with files (InMemoryFileSystem starts empty, no /tmp or /app directories)
+  - createInMemoryFileSystem().writeFile() auto-creates parent directories
+---
