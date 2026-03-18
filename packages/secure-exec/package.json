@@ -49,6 +49,7 @@
     "whatwg-url": "^15.1.0"
   },
   "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.60.0",
     "@types/node": "^22.10.2",
     "@vitest/browser": "^2.1.8",
     "playwright": "^1.52.0",
