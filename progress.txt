@@ -3,10 +3,12 @@ Started: 2026-03-17
 PRD: ralph/kernel-hardening (46 stories)
 
 ## Codebase Patterns
-- @secure-exec/core package at packages/secure-exec-core/ owns shared types, utilities, and generated isolate-runtime sources — build it first (turbo ^build handles this)
+- @secure-exec/core package at packages/secure-exec-core/ owns shared types, utilities, bridge guest code, generated sources, and build scripts — build it first (turbo ^build handles this)
 - When adding exports to shared modules in core, update BOTH core/src/index.ts AND the corresponding re-export file in secure-exec/src/shared/
-- build-isolate-runtime.mjs syncs generated manifest to both secure-exec and secure-exec-core — until US-053 moves the build script to core
-- Source-grep tests (isolate-runtime-injection-policy) may need to read from core's src/ after code moves there
+- Bridge source is in core/src/bridge/, build scripts in core/scripts/, isolate-runtime source in core/isolate-runtime/
+- build:bridge, build:polyfills, build:isolate-runtime scripts all live in core's package.json — secure-exec's build is just tsc
+- bridge-loader.ts in secure-exec resolves core package root via createRequire(import.meta.url).resolve("@secure-exec/core") to find bridge.js and source
+- Source-grep tests use readCoreSource() helper to read files from core's source tree
 - Kernel errors use `KernelError(code, message)` from types.ts — always use structured codes, not plain Error with embedded code in message
 - ERRNO_MAP in wasmvm/src/wasi-constants.ts is the single source of truth for POSIX→WASI errno mapping
 - Bridge ServerResponseBridge.write/end must treat null as no-op (Node.js convention: res.end(null) ends without writing; Fastify's sendTrailer calls res.end(null, null, null))
@@ -852,4 +854,28 @@ PRD: ralph/kernel-hardening (46 stories)
   - Re-export files must include ALL exports from the original module (check for missing exports by running tsc)
   - Source-grep tests that read shared files must be updated to point to core's canonical source location
   - The generated/isolate-runtime.ts must exist in core for require-setup.ts to compile — copy it during build
+---
+
+## 2026-03-17 - US-053
+- Moved bridge/ directory (11 files) from secure-exec/src/bridge/ to core/src/bridge/
+- Moved generated/polyfills.ts to core/src/generated/ (isolate-runtime.ts already in core)
+- Moved isolate-runtime/ source directory (19 files) to core/isolate-runtime/
+- Moved build-polyfills.mjs and build-isolate-runtime.mjs to core/scripts/
+- Moved tsconfig.isolate-runtime.json to core
+- Updated core package.json: added build:bridge, build:polyfills, build:isolate-runtime, build:generated scripts; added esbuild and node-stdlib-browser deps; added "default" export condition
+- Simplified secure-exec package.json: removed all build:* scripts (now in core), simplified build to just tsc, simplified check-types, removed build:generated prefixes from test scripts
+- Updated 7 files in secure-exec to import getIsolateRuntimeSource/POLYFILL_CODE_MAP from @secure-exec/core instead of local generated/
+- Updated bridge-loader.ts to resolve core package root via createRequire and find bridge source/bundle in core's directory
+- Updated 6 type conformance tests to import bridge modules from core's source
+- Updated bridge-registry-policy.test.ts with readCoreSource() helper for reading core-owned files
+- Updated isolate-runtime-injection-policy.test.ts to read build script from core/scripts/
+- Removed dual-sync code from build-isolate-runtime.mjs (no longer needed — script is now in core)
+- Added POLYFILL_CODE_MAP export to core's index.ts barrel
+- Files changed: 53 files (moves + import updates)
+- **Learnings for future iterations:**
+  - core's exports map needs a "default" condition (not just "import") for createRequire().resolve() to work — ESM-only exports break require.resolve
+  - bridge-loader.ts uses createRequire(import.meta.url) to find @secure-exec/core package root, then derives dist/bridge.js and src/bridge/index.ts paths from there
+  - Generated files (polyfills.ts, isolate-runtime.ts) are gitignored and must be built before tsc — turbo task dependencies handle this automatically
+  - Kernel integration tests (tests/kernel/) have pre-existing failures unrelated to package restructuring — they use a different code path through runtime-node
+  - build:bridge produces dist/bridge.js in whichever package owns the bridge source — bridge-loader.ts must know where to find it
 ---
