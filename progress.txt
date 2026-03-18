@@ -1035,3 +1035,18 @@ PRD: ralph/kernel-hardening (46 stories)
   - Barrel package re-exports are clean: index.ts imports from @secure-exec/node, @secure-exec/python, @secure-exec/browser, and local ./shared re-exports from @secure-exec/core
   - All pre-existing test failures are in kernel/ tests requiring WASM binary — doc/contract changes don't affect test outcomes
 ---
+
+## 2026-03-17 - US-062
+- Replaced all 4 source-grep tests in isolate-runtime-injection-policy.test.ts with behavioral tests
+- New tests:
+  1. All isolate runtime sources are valid self-contained IIFEs (no template-literal interpolation holes, parseable JS)
+  2. filePath injection payload does not execute as code (proves template-literal eval is blocked at runtime)
+  3. Bridge setup provides require, module, and CJS file globals (proves loaders produce correct runtime)
+  4. Hardened bridge globals cannot be reassigned by user code (proves immutability enforcement)
+- Files changed: packages/secure-exec/tests/isolate-runtime-injection-policy.test.ts
+- **Learnings for future iterations:**
+  - ExecResult is { code: number, errorMessage?: string } — console output requires onStdio capture hook
+  - getIsolateRuntimeSource is exported from @secure-exec/core (packages/secure-exec-core/src/generated/isolate-runtime.ts), not from secure-exec
+  - Use createConsoleCapture() pattern: collect events via onStdio, read via .stdout() — same pattern as payload-limits.test.ts
+  - Bridge globals exposed via __runtimeExposeCustomGlobal are non-writable non-configurable (immutable)
+---
