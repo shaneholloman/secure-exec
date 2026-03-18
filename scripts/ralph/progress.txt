@@ -1229,3 +1229,24 @@ PRD: ralph/kernel-hardening (46 stories)
   - checkChildProcess has different deny-by-default: no checker = allow (not deny), unlike fs where no checker = deny
   - PermissionDecision.reason was defined in types but never wired through to errors before this change
 ---
+
+## 2026-03-17 - US-080
+- What was implemented: Added @xterm/headless devDependency to @secure-exec/kernel and created TerminalHarness utility
+- Files changed:
+  - packages/kernel/package.json — added @xterm/headless devDependency
+  - packages/kernel/test/terminal-harness.ts — NEW: TerminalHarness class wiring openShell() to headless xterm Terminal
+  - pnpm-lock.yaml — updated for new dependency
+- **TerminalHarness API:**
+  - constructor(kernel, options?) — creates 80x24 headless Terminal, opens shell, wires onData → term.write
+  - type(input) — sends input through PTY, resolves after 50ms settlement (rejects if called re-entrantly)
+  - screenshotTrimmed() — viewport rows, trimmed per line, trailing empty lines dropped
+  - line(row) — single trimmed row (0-indexed from viewport top)
+  - waitFor(text, occurrence?, timeoutMs?) — polls every 20ms, throws with screen dump on timeout or shell death
+  - exit() — sends ^D and awaits shell exit
+  - dispose() — kills shell, disposes terminal, idempotent
+- **Learnings for future iterations:**
+  - xterm.write(data, callback) requires callback for buffer to reflect changes synchronously — but settlement-based approach avoids this by waiting for output to stop
+  - IBuffer.getLine(viewportY + row) gives viewport-relative rows; .translateToString(true) trims trailing whitespace
+  - @xterm/headless is pure JS, no native addons or DOM — works in vitest/Node.js without any polyfills
+  - Shell output arrives via shell.onData callback as Uint8Array — term.write accepts both string and Uint8Array
+---
