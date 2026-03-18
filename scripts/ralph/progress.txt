@@ -1527,3 +1527,15 @@ PRD: ralph/kernel-hardening (46 stories)
   - `deps.processConfig.env` is the init-time filtered env (already filtered by `filterEnv()` in execution-driver.ts) — safe to use as fallback
   - When `options.env` is undefined, `stripDangerousEnv(undefined)` returns undefined — the fallback must happen BEFORE the strip call
 ---
+
+## 2026-03-18 - US-105
+- What was implemented: Added assertTextPayloadSize guard to readFileRef (text file read bridge path), matching the existing guard in readFileBinaryRef
+- The text read path was missing payload size validation, allowing sandbox code to read arbitrarily large text files into host memory via readFileSync('path', 'utf8')
+- Files changed:
+  - packages/secure-exec-node/src/bridge-setup.ts — added assertTextPayloadSize call with fsJsonPayloadLimit before returning text
+  - packages/secure-exec/tests/runtime-driver/node/payload-limits.test.ts — added 2 tests: oversized text file read rejection and normal-sized text file read preservation
+- **Learnings for future iterations:**
+  - Text file reads use fsJsonPayloadLimit (4MB default) not base64Limit — text is passed directly, not base64-encoded
+  - assertTextPayloadSize is the convenience wrapper for text (handles UTF-8 byte length calculation)
+  - readFileRef returns string from readTextFile; readFileBinaryRef returns base64-encoded Buffer — different limits and guards needed
+---

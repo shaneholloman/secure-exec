@@ -393,6 +393,44 @@ describe("NodeRuntime payload limits", () => {
 		expect(capture.stdout()).toBe("hello\n");
 	});
 
+	it("rejects oversized text file reads", async () => {
+		const fs = createInMemoryFileSystem();
+		const oversizedText = "x".repeat(DEFAULT_ISOLATE_JSON_PAYLOAD_BYTES + 1);
+		await fs.mkdir("/data");
+		await fs.writeFile("/data/too-large.txt", oversizedText);
+
+		proc = createTestNodeRuntime({ filesystem: fs, permissions: allowAllFs });
+		const result = await proc.exec(`
+      const fs = require('fs');
+      fs.readFileSync('/data/too-large.txt', 'utf8');
+    `);
+
+		expect(result.code).toBe(1);
+		expect(result.errorMessage).toContain(PAYLOAD_LIMIT_ERROR_CODE);
+		expect(result.errorMessage).toContain("fs.readFile");
+	});
+
+	it("allows normal-sized text file reads", async () => {
+		const fs = createInMemoryFileSystem();
+		await fs.mkdir("/data");
+		await fs.writeFile("/data/normal.txt", "hello world");
+
+		const capture = createConsoleCapture();
+		proc = createTestNodeRuntime({
+			filesystem: fs,
+			permissions: allowAllFs,
+			onStdio: capture.onStdio,
+		});
+		const result = await proc.exec(`
+      const fs = require('fs');
+      const content = fs.readFileSync('/data/normal.txt', 'utf8');
+      console.log(content);
+    `);
+
+		expect(result.code).toBe(0);
+		expect(capture.stdout()).toBe("hello world\n");
+	});
+
 	it("rejects out-of-range payload limit configuration", () => {
 		expect(
 			() => createTestNodeRuntime({ payloadLimits: { jsonPayloadBytes: 0 } }),

@@ -267,7 +267,13 @@ export async function setupRequire(
 		// Create individual References for each fs operation
 		const readFileRef = new ivm.Reference(async (path: string) => {
 			checkBridgeBudget(deps);
-			return fs.readTextFile(path);
+			const text = await fs.readTextFile(path);
+			assertTextPayloadSize(
+				`fs.readFile ${path}`,
+				text,
+				fsJsonPayloadLimit,
+			);
+			return text;
 		});
 		const writeFileRef = new ivm.Reference(
 			async (path: string, content: string) => {
