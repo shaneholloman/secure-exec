@@ -1766,3 +1766,17 @@ PRD: ralph/kernel-hardening (46 stories)
   - Transitive file: deps resolve correctly in both host and sandbox — npm hoists all 3 levels to root node_modules
   - Walking .child property chain is a clean way to verify all transitive levels loaded correctly
 ---
+
+## 2026-03-18 - US-094
+- Created optional dependency fixture at packages/secure-exec/tests/projects/optional-deps-pass/
+- package.json has optionalDependencies with a nonexistent package (@anthropic-internal/nonexistent-optional-pkg)
+- npm install succeeds (optional deps that fail to resolve are skipped gracefully)
+- Entry file requires the optional dep with try/catch, prints JSON with optionalAvailable: false
+- Also requires semver as a real dependency to prove normal deps still work
+- Fixture passes project-matrix parity test — both host and sandbox output identical JSON
+- Files created: fixture.json, package.json, package-lock.json, src/index.js
+- **Learnings for future iterations:**
+  - npm gracefully skips nonexistent optional dependencies during install — no error, just a warning
+  - Using a clearly-namespaced nonexistent package avoids accidental collisions with real packages
+  - Both host Node and sandbox produce identical MODULE_NOT_FOUND errors for missing optional deps
+---
