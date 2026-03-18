@@ -39,6 +39,50 @@ if (typeof __performance !== "undefined" && __performance !== null) {
 	});
 }
 
-if (!Reflect.deleteProperty(globalThis, "SharedArrayBuffer")) {
+/* Harden SharedArrayBuffer removal — neuter prototype so saved refs are useless,
+   then lock the global property so sandbox code cannot restore it. */
+const __OrigSAB = globalThis.SharedArrayBuffer;
+if (typeof __OrigSAB === "function") {
+	// Neuter the prototype so any previously-saved reference produces broken instances
+	try {
+		const proto = __OrigSAB.prototype;
+		if (proto) {
+			for (const key of [
+				"byteLength",
+				"slice",
+				"grow",
+				"maxByteLength",
+				"growable",
+			]) {
+				try {
+					Object.defineProperty(proto, key, {
+						get() {
+							throw new TypeError(
+								"SharedArrayBuffer is not available in sandbox",
+							);
+						},
+						configurable: false,
+					});
+				} catch {
+					/* property may not exist or be non-configurable */
+				}
+			}
+		}
+	} catch {
+		/* best-effort prototype neutering */
+	}
+}
+
+// Lock the global to undefined — configurable: false prevents re-definition
+try {
+	Object.defineProperty(globalThis, "SharedArrayBuffer", {
+		value: undefined,
+		configurable: false,
+		writable: false,
+		enumerable: false,
+	});
+} catch {
+	// Fallback: delete then set
+	Reflect.deleteProperty(globalThis, "SharedArrayBuffer");
 	setGlobalValue("SharedArrayBuffer", undefined);
 }

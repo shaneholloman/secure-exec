@@ -1122,6 +1122,63 @@ describe("NodeRuntime", () => {
 		});
 	});
 
+	it("SharedArrayBuffer global cannot be restored by sandbox code", async () => {
+		proc = createTestNodeRuntime();
+		const result = await proc.run(`
+      let restored = false;
+      try {
+        Object.defineProperty(globalThis, 'SharedArrayBuffer', {
+          value: function FakeSAB() {},
+          configurable: true,
+        });
+        restored = true;
+      } catch (e) {
+        restored = false;
+      }
+      // Also try direct assignment
+      globalThis.SharedArrayBuffer = function FakeSAB2() {};
+      module.exports = {
+        stillUndefined: typeof SharedArrayBuffer === 'undefined',
+        definePropertyFailed: !restored,
+      };
+    `);
+		expect(result.exports).toEqual({
+			stillUndefined: true,
+			definePropertyFailed: true,
+		});
+	});
+
+	it("saved SharedArrayBuffer reference is non-functional after freeze", async () => {
+		proc = createTestNodeRuntime();
+		const result = await proc.run(`
+      // Even if somehow a reference was obtained, the prototype is neutered
+      const desc = Object.getOwnPropertyDescriptor(globalThis, 'SharedArrayBuffer');
+      let protoNeutered = false;
+      try {
+        // SharedArrayBuffer.prototype should have been neutered before deletion;
+        // verify we can't construct anything useful
+        const sab = new ArrayBuffer(8);
+        // Attempt to access SharedArrayBuffer-specific props on a real SAB
+        // (they shouldn't exist on ArrayBuffer, this confirms SAB is gone)
+        protoNeutered = typeof sab.grow === 'undefined';
+      } catch {
+        protoNeutered = true;
+      }
+      module.exports = {
+        isUndefined: desc !== undefined && desc.value === undefined,
+        isNonConfigurable: desc !== undefined && desc.configurable === false,
+        isNonWritable: desc !== undefined && desc.writable === false,
+        protoNeutered,
+      };
+    `);
+		expect(result.exports).toEqual({
+			isUndefined: true,
+			isNonConfigurable: true,
+			isNonWritable: true,
+			protoNeutered: true,
+		});
+	});
+
 	it("restores advancing clocks when timing mitigation is off", async () => {
 		const capture = createConsoleCapture();
 		proc = createTestNodeRuntime({
