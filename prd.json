@@ -1727,7 +1727,7 @@
         "Tests pass"
       ],
       "priority": 102,
-      "passes": false,
+      "passes": true,
       "notes": "MEDIUM \u2014 execution-driver.ts:108-129. __unsafeCreateContext resets budgetState but NOT module caches. Previous execution's modules leak into next context."
     },
     {
