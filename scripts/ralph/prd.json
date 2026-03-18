@@ -1563,7 +1563,7 @@
         "Tests pass"
       ],
       "priority": 92,
-      "passes": false,
+      "passes": true,
       "notes": "HIGH \u2014 pipe-manager.ts:82-103. Write after read-end close silently succeeds, buffers up to 64KB then EAGAIN. Should be EPIPE."
     },
     {

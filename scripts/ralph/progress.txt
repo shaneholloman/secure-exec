@@ -1313,3 +1313,13 @@ PRD: ralph/kernel-hardening (46 stories)
   - ls from interactive shell shows "WARN could not retrieve pid for child process" — proc_spawn return value not read correctly by brush-shell
   - kernel VFS adapter getIno must parse the vfsStat RPC response's "type" field (not "isDirectory") since the handler encodes type as string
 ---
+
+## 2026-03-18 - US-122
+- What was implemented: Added EPIPE check for pipe write when read end is closed
+- Files changed:
+  - `packages/kernel/src/pipe-manager.ts` — added `state.closed.read` check in write() before buffering
+  - `packages/kernel/test/pipe-manager.test.ts` — added two tests: write-after-read-close throws EPIPE, write-with-open-read succeeds
+- **Learnings for future iterations:**
+  - PipeManager write() already checked write-end closure but not read-end — POSIX requires EPIPE when no readers exist
+  - The check order matters: EBADF → EPIPE (write closed) → EPIPE (read closed) → deliver/buffer
+---
