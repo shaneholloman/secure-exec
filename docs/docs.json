@@ -11,6 +11,7 @@
     }
   },
   "name": "Secure Exec",
+  "favicon": "/favicon.svg",
   "logo": {
     "light": "/logo.svg",
     "dark": "/logo.svg"

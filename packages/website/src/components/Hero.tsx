@@ -357,7 +357,7 @@ export function Hero() {
               >
                 <a
                   href="/docs"
-                  className="selection-dark inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md btn-chrome px-5 py-2.5 text-sm"
+                  className="selection-dark w-full sm:w-auto inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md btn-chrome px-5 py-2.5 text-sm"
                   style={{ "--chrome-angle": "170deg" } as React.CSSProperties}
                 >
                   Get Started

@@ -72,7 +72,10 @@ export function Comparison() {
           className="grid grid-cols-1 sm:grid-cols-2 gap-6"
         >
           {/* Secure Exec column */}
-          <div className="rounded-xl bg-sky-500/[0.03] border border-sky-500/10 p-6 sm:p-8 space-y-5">
+          <div
+            className="rounded-xl bg-sky-500/[0.03] p-6 sm:p-8 space-y-5 chrome-gradient-border"
+            style={{ "--chrome-angle": "170deg" } as React.CSSProperties}
+          >
             <div className="mb-6">
               <img src="/secure-exec-logo-long.svg" alt="Secure Exec" className="h-5 w-auto mb-2" />
               <p className="text-sm text-zinc-400">Run untrusted code (Node.js, Python) inside your backend process</p>
@@ -85,7 +88,10 @@ export function Comparison() {
           </div>
 
           {/* Sandbox provider column */}
-          <div className="rounded-xl bg-white/[0.02] border border-white/5 p-6 sm:p-8 space-y-5">
+          <div
+            className="rounded-xl bg-white/[0.02] p-6 sm:p-8 space-y-5 chrome-gradient-border"
+            style={{ "--chrome-angle": "200deg" } as React.CSSProperties}
+          >
             <div className="mb-6">
               <span className="text-sm text-zinc-500 font-mono">Sandbox</span>
               <p className="text-sm text-zinc-400 mt-2">Spin up a full OS with root access, system packages, and persistent disk</p>
@@ -107,7 +113,7 @@ export function Comparison() {
         >
           <a
             href="/docs/comparison/sandbox"
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-zinc-300 hover:text-white hover:border-white/20 hover:bg-white/[0.05] transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm btn-chrome-outline"
           >
             Full comparison guide
             <span aria-hidden="true">→</span>
@@ -119,7 +125,8 @@ export function Comparison() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5, delay: 0.3 }}
-          className="mt-10 rounded-xl bg-white/[0.02] border border-white/5 p-6 sm:p-8"
+          className="mt-10 rounded-xl bg-white/[0.02] p-6 sm:p-8 chrome-gradient-border"
+          style={{ "--chrome-angle": "50deg" } as React.CSSProperties}
         >
           <div>
             <div className="flex items-center gap-2 mb-3">
@@ -133,7 +140,7 @@ export function Comparison() {
               Supports Claude Code, Codex, OpenCode, Amp, and Pi.
             </p>
           </div>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-6 pt-6 border-t border-white/5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-6 pt-6 border-t border-white/10">
             <div className="flex flex-col gap-2">
               <span className="text-xs text-zinc-600">Works with</span>
               <div className="flex items-center gap-4 opacity-50">
@@ -152,7 +159,7 @@ export function Comparison() {
               href="https://sandboxagent.dev/"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-zinc-300 hover:text-white hover:border-white/20 hover:bg-white/[0.05] transition-colors"
+              className="inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm btn-chrome-outline"
             >
               Learn more
               <span aria-hidden="true">→</span>

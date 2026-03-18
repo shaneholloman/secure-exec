@@ -36,7 +36,7 @@ function ColdStartChart() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
         <div>
           <h4 className="text-sm font-medium text-white flex items-center">
             Cold start
@@ -56,7 +56,7 @@ function ColdStartChart() {
           </h4>
           <p className="text-[11px] text-zinc-600 italic mt-1">Lower is better</p>
         </div>
-        <div className="flex gap-1 ml-auto">
+        <div className="flex gap-1 sm:ml-auto">
           {groups.map((t, i) => (
             <button
               key={t.label}
@@ -74,8 +74,8 @@ function ColdStartChart() {
       </div>
       <div className="space-y-1.5">
         {/* Secure Exec bar */}
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-zinc-500 w-48 shrink-0 font-mono">Secure Exec</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+          <span className="text-xs text-zinc-500 sm:w-48 shrink-0 font-mono">Secure Exec</span>
           <div className="flex-1 relative h-7 bg-white/5 rounded-sm overflow-hidden">
             <motion.div
               key={active}
@@ -97,8 +97,8 @@ function ColdStartChart() {
           </div>
         </div>
         {/* Sandbox bar */}
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-zinc-500 w-48 shrink-0 font-mono">Fastest sandbox</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+          <span className="text-xs text-zinc-500 sm:w-48 shrink-0 font-mono">Fastest sandbox</span>
           <div className="flex-1 relative h-7 bg-white/5 rounded-sm overflow-hidden">
             <motion.div
               key={active}
@@ -143,8 +143,8 @@ function MetricBar({
       </div>
       <div className="space-y-1.5">
         {/* Secure Exec bar */}
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-zinc-500 w-48 shrink-0 font-mono">Secure Exec</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+          <span className="text-xs text-zinc-500 sm:w-48 shrink-0 font-mono">Secure Exec</span>
           <div className="flex-1 relative h-7 bg-white/5 rounded-sm overflow-hidden">
             <motion.div
               initial={{ width: 0 }}
@@ -168,8 +168,8 @@ function MetricBar({
           </div>
         </div>
         {/* Sandbox bar */}
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-zinc-500 w-48 shrink-0 font-mono">{sandbox.label}</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+          <span className="text-xs text-zinc-500 sm:w-48 shrink-0 font-mono">{sandbox.label}</span>
           <div className="flex-1 relative h-7 bg-white/5 rounded-sm overflow-hidden">
             <motion.div
               initial={{ width: 0 }}
@@ -202,7 +202,7 @@ function CostChart() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
         <div>
           <h4 className="text-sm font-medium text-white flex items-center">
             Cost per execution-second
@@ -222,7 +222,7 @@ function CostChart() {
           </h4>
           <p className="text-[11px] text-zinc-600 italic mt-1">Lower is better</p>
         </div>
-        <div className="flex gap-1 ml-auto">
+        <div className="flex gap-1 sm:ml-auto">
           {tiers.map((tier, i) => (
             <button
               key={tier.label}
@@ -240,8 +240,8 @@ function CostChart() {
       </div>
       <div className="space-y-1.5">
         {/* Secure Exec bar */}
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-zinc-500 w-48 shrink-0 font-mono">Secure Exec</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+          <span className="text-xs text-zinc-500 sm:w-48 shrink-0 font-mono">Secure Exec</span>
           <div className="flex-1 relative h-7 bg-white/5 rounded-sm overflow-hidden">
             <motion.div
               key={active}
@@ -263,8 +263,8 @@ function CostChart() {
           </div>
         </div>
         {/* Sandbox bar */}
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-zinc-500 w-48 shrink-0 font-mono">Cheapest sandbox</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+          <span className="text-xs text-zinc-500 sm:w-48 shrink-0 font-mono">Cheapest sandbox</span>
           <div className="flex-1 relative h-7 bg-white/5 rounded-sm overflow-hidden">
             <motion.div
               key={active}
