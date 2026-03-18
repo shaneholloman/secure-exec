@@ -59,6 +59,7 @@ class KernelImpl implements Kernel {
 	private commandRegistry = new CommandRegistry();
 	private userManager: UserManager;
 	private drivers: RuntimeDriver[] = [];
+	private driverPids = new Map<string, Set<number>>();
 	private permissions?: import("./types.js").Permissions;
 	private maxProcesses?: number;
 	private env: Record<string, string>;
@@ -81,8 +82,10 @@ class KernelImpl implements Kernel {
 		this.cwd = options.cwd ?? "/home/user";
 		this.userManager = new UserManager();
 
-		// Clean up FD table when a process exits
+		// Clean up FD table and driver PID ownership when a process exits
 		this.processTable.onProcessExit = (pid) => {
+			const entry = this.processTable.get(pid);
+			if (entry) this.driverPids.get(entry.driver)?.delete(pid);
 			this.cleanupProcessFDs(pid);
 		};
 	}
@@ -94,8 +97,13 @@ class KernelImpl implements Kernel {
 	async mount(driver: RuntimeDriver): Promise<void> {
 		this.assertNotDisposed();
 
-		// Initialize the driver with the kernel interface
-		await driver.init(this.createKernelInterface());
+		// Track PIDs owned by this driver
+		if (!this.driverPids.has(driver.name)) {
+			this.driverPids.set(driver.name, new Set());
+		}
+
+		// Initialize the driver with a scoped kernel interface
+		await driver.init(this.createKernelInterface(driver.name));
 
 		// Register commands
 		this.commandRegistry.register(driver);
@@ -347,6 +355,9 @@ class KernelImpl implements Kernel {
 		// Allocate PID atomically
 		const pid = this.processTable.allocatePid();
 
+		// Register PID ownership before driver.spawn() so the driver can use it
+		this.driverPids.get(driver.name)?.add(pid);
+
 		// Create FD table — wire pipe FDs when overrides are provided
 		const table = this.createChildFDTable(pid, options, callerPid);
 
@@ -449,12 +460,26 @@ class KernelImpl implements Kernel {
 	// Kernel interface (exposed to drivers)
 	// -----------------------------------------------------------------------
 
-	private createKernelInterface(): KernelInterface {
+	private createKernelInterface(driverName: string): KernelInterface {
+		// Validate that the calling driver owns the target PID
+		const assertOwns = (pid: number) => {
+			if (this.driverPids.get(driverName)?.has(pid)) return;
+
+			// Check if any driver owns this PID — if not, the PID doesn't exist
+			for (const pids of this.driverPids.values()) {
+				if (pids.has(pid)) {
+					throw new KernelError("EPERM", `driver "${driverName}" does not own PID ${pid}`);
+				}
+			}
+			throw new KernelError("ESRCH", `no such process ${pid}`);
+		};
+
 		return {
 			vfs: this.vfs,
 
 			// FD operations
 			fdOpen: (pid, path, flags, mode) => {
+				assertOwns(pid);
 				// /dev/fd/N → dup(N): equivalent to open() on the underlying FD
 				if (path.startsWith("/dev/fd/")) {
 					const n = parseInt(path.slice(8), 10);
@@ -469,6 +494,7 @@ class KernelImpl implements Kernel {
 				return table.open(path, flags, filetype);
 			},
 			fdRead: async (pid, fd, length) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
@@ -495,6 +521,7 @@ class KernelImpl implements Kernel {
 				return slice;
 			},
 			fdWrite: (pid, fd, data) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
@@ -511,6 +538,7 @@ class KernelImpl implements Kernel {
 				return this.vfsWrite(entry, data);
 			},
 			fdClose: (pid, fd) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) return;
@@ -531,6 +559,7 @@ class KernelImpl implements Kernel {
 				}
 			},
 			fdSeek: async (pid, fd, offset, whence) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
@@ -563,6 +592,7 @@ class KernelImpl implements Kernel {
 				return newCursor;
 			},
 			fdPread: async (pid, fd, length, offset) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
@@ -580,6 +610,7 @@ class KernelImpl implements Kernel {
 				return content.slice(pos, end);
 			},
 			fdPwrite: async (pid, fd, data, offset) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
@@ -600,17 +631,21 @@ class KernelImpl implements Kernel {
 				return data.length;
 			},
 			fdDup: (pid, fd) => {
+				assertOwns(pid);
 				return this.getTable(pid).dup(fd);
 			},
 			fdDup2: (pid, oldFd, newFd) => {
+				assertOwns(pid);
 				this.getTable(pid).dup2(oldFd, newFd);
 			},
 			fdStat: (pid, fd) => {
+				assertOwns(pid);
 				return this.getTable(pid).stat(fd);
 			},
 
 			// Process operations
 			spawn: (command, args, ctx) => {
+				if (ctx.ppid) assertOwns(ctx.ppid);
 				return this.spawnManaged(command, args, {
 					env: ctx.env,
 					cwd: ctx.cwd,
@@ -622,55 +657,70 @@ class KernelImpl implements Kernel {
 				}, ctx.ppid);
 			},
 			waitpid: (pid) => {
+				try { assertOwns(pid); } catch (e) { return Promise.reject(e); }
 				return this.processTable.waitpid(pid);
 			},
 			kill: (pid, signal) => {
+				// Negative PID = process group kill, handled by kernel directly
+				if (pid >= 0) assertOwns(pid);
 				this.processTable.kill(pid, signal);
 			},
-			getpid: (pid) => pid,
+			getpid: (pid) => {
+				assertOwns(pid);
+				return pid;
+			},
 			getppid: (pid) => {
+				assertOwns(pid);
 				return this.processTable.getppid(pid);
 			},
 
 			// Process group / session
 			setpgid: (pid, pgid) => {
+				assertOwns(pid);
 				this.processTable.setpgid(pid, pgid);
 			},
 			getpgid: (pid) => {
+				assertOwns(pid);
 				return this.processTable.getpgid(pid);
 			},
 			setsid: (pid) => {
+				assertOwns(pid);
 				return this.processTable.setsid(pid);
 			},
 			getsid: (pid) => {
+				assertOwns(pid);
 				return this.processTable.getsid(pid);
 			},
 
 			// Pipe operations
 			pipe: (pid) => {
-				// Create pipe and install both ends in the process's FD table
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				return this.pipeManager.createPipeFDs(table);
 			},
 
 			// PTY operations
 			openpty: (pid) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				return this.ptyManager.createPtyFDs(table);
 			},
 			isatty: (pid, fd) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) return false;
 				return this.ptyManager.isSlave(entry.description.id);
 			},
 			ptySetDiscipline: (pid, fd, config) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
 				this.ptyManager.setDiscipline(entry.description.id, config);
 			},
 			ptySetForegroundPgid: (pid, fd, pgid) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
@@ -679,24 +729,28 @@ class KernelImpl implements Kernel {
 
 			// Termios operations
 			tcgetattr: (pid, fd) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
 				return this.ptyManager.getTermios(entry.description.id);
 			},
 			tcsetattr: (pid, fd, termios) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
 				this.ptyManager.setTermios(entry.description.id, termios);
 			},
 			tcsetpgrp: (pid, fd, pgid) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
 				this.ptyManager.setForegroundPgid(entry.description.id, pgid);
 			},
 			tcgetpgrp: (pid, fd) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
@@ -705,6 +759,7 @@ class KernelImpl implements Kernel {
 
 			// /dev/fd operations
 			devFdReadDir: (pid) => {
+				assertOwns(pid);
 				const table = this.fdTableManager.get(pid);
 				if (!table) return [];
 				const fds: number[] = [];
@@ -712,6 +767,7 @@ class KernelImpl implements Kernel {
 				return fds.sort((a, b) => a - b).map(String);
 			},
 			devFdStat: async (pid, fd) => {
+				assertOwns(pid);
 				const table = this.getTable(pid);
 				const entry = table.get(fd);
 				if (!entry) throw new KernelError("EBADF", `bad file descriptor ${fd}`);
@@ -741,10 +797,12 @@ class KernelImpl implements Kernel {
 
 			// Environment
 			getenv: (pid) => {
+				assertOwns(pid);
 				const entry = this.processTable.get(pid);
 				return entry?.env ?? { ...this.env };
 			},
 			getcwd: (pid) => {
+				assertOwns(pid);
 				const entry = this.processTable.get(pid);
 				return entry?.cwd ?? this.cwd;
 			},
