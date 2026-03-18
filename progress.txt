@@ -3,6 +3,8 @@ Started: 2026-03-17
 PRD: ralph/kernel-hardening (46 stories)
 
 ## Codebase Patterns
+- Claude binary at ~/.claude/local/claude — not on PATH by default; skip helpers must check this fallback location
+- Claude Code --output-format stream-json requires --verbose flag; uses ANTHROPIC_BASE_URL natively (no fetch interceptor)
 - openShell() controller must close its slave FD after spawn (close-after-fork) — otherwise slave refCount stays >0 and master reads never get EOF
 - fd_pipe/fd_dup (host_process) return kernel FDs — MUST register in local FDTable + localToKernelFd map for WASI fd_renumber/fd_close to work
 - KernelFDTable.renumber closes kernel FD of overwritten target (POSIX close-on-renumber) — critical for pipe write end closure during stdout restore
