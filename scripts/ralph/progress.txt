@@ -1925,3 +1925,26 @@ PRD: ralph/kernel-hardening (46 stories)
   - OpenCode tool_use: tool names are `read`, `edit`, `bash`, `glob`, `grep`, `list` — same as Claude Code
   - Mock server bash tool_use executes but may not persist files (tool input schema may not exactly match)
 ---
+
+## 2026-03-18 - US-100
+- Implemented Strategy B SDK client tests for OpenCode in opencode-headless.test.ts
+- Added @opencode-ai/sdk as devDependency to packages/secure-exec
+- Added 5 tests in Strategy B describe block:
+  1. SDK client connects — session.list() returns valid array
+  2. SDK sends prompt — session.create() + session.prompt() returns parts
+  3. SDK session management — create, prompt, messages() returns ≥2 messages
+  4. SSE streaming — raw fetch to /event endpoint verifies text/event-stream and multiple data: lines
+  5. SDK error handling — session.get() with invalid ID returns error
+- opencode serve spawned in beforeAll with --port 0 (OS-assigned unique port), killed in afterAll
+- Mock LLM server (ANTHROPIC_BASE_URL redirect) used for deterministic LLM responses
+- Git repo initialized in temp work directory for opencode serve project context
+- Files changed: packages/secure-exec/tests/cli-tools/opencode-headless.test.ts, packages/secure-exec/package.json, pnpm-lock.yaml
+- **Learnings for future iterations:**
+  - opencode serve outputs "opencode server listening on http://..." to stdout — parse URL with regex
+  - createOpencodeClient({ baseUrl, directory }) from @opencode-ai/sdk sets x-opencode-directory header automatically
+  - opencode serve with ANTHROPIC_BASE_URL works reliably (unlike opencode run which may hang during plugin init)
+  - SDK session.prompt() is synchronous (waits for full LLM response); use /event SSE endpoint for streaming verification
+  - SDK error handling: non-throwing mode (default) returns { data, error } — check result.error for HTTP errors
+  - OPENCODE_CONFIG_CONTENT env var passes JSON config to opencode binary (used by SDK's createOpencodeServer)
+  - opencode serve needs project context — init git repo + package.json in work directory
+---

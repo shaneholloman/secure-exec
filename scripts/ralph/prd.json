@@ -2355,7 +2355,7 @@
         "Tests pass"
       ],
       "priority": 138,
-      "passes": false,
+      "passes": true,
       "notes": "CLI E2E Phase 3, Strategy B. Tests HTTP/SSE client bridge by running @opencode-ai/sdk inside the sandbox talking to opencode serve on host. Depends on US-096 (SSE/streams). API tokens (ANTHROPIC_API_KEY, OPENAI_API_KEY) available at ~/misc/env.txt \u2014 source it before running tests that need real or mock-pointed API keys."
     },
     {
