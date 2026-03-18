@@ -2077,3 +2077,14 @@ PRD: ralph/kernel-hardening (46 stories)
   - The adapter's `httpServerListen` creates real Node.js HTTP servers on loopback — ports are ephemeral (port: 0) and auto-assigned
   - `normalizeLoopbackHostname()` already coerces 0.0.0.0 → 127.0.0.1 for server binds
 ---
+
+## 2026-03-18 - US-159
+- Verified that express-pass and fastify-pass fixtures now pass in the non-kernel secure-exec project matrix
+- Root cause: the SSRF loopback exemption added in US-158 fixed the underlying issue — sandbox-spawned HTTP servers can now receive loopback requests
+- No code changes needed; all 22 project-matrix tests pass, typecheck passes
+- Files changed:
+  - scripts/ralph/prd.json (marked US-159 as passes: true)
+- **Learnings for future iterations:**
+  - US-158 SSRF loopback exemption was the actual fix for Express/Fastify parity failures, despite the PRD noting them as separate issues
+  - Kernel E2E project-matrix still fails for express-pass/fastify-pass (exit code 1, "WARN could not retrieve pid for child process") — this is a separate brush-shell issue, not in scope for US-159
+---

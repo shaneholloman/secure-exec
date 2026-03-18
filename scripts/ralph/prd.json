@@ -2727,8 +2727,8 @@
         "Tests pass"
       ],
       "priority": 159,
-      "passes": false,
-      "notes": "Pre-existing test failures. express-pass and fastify-pass fixtures exit code 1 in secure-exec but exit 0 in host node. Separate from the SSRF loopback issue (US-158). Fixtures are in packages/secure-exec/tests/projects/. Relates to US-035, US-036, US-049."
+      "passes": true,
+      "notes": "Pre-existing test failures. express-pass and fastify-pass fixtures exit code 1 in secure-exec but exit 0 in host node. Separate from the SSRF loopback issue (US-158). Fixtures are in packages/secure-exec/tests/projects/. Relates to US-035, US-036, US-049. Fixed as a side effect of US-158 SSRF loopback exemption."
     },
     {
       "id": "US-160",
