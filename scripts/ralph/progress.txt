@@ -3,6 +3,8 @@ Started: 2026-03-17
 PRD: ralph/kernel-hardening (46 stories)
 
 ## Codebase Patterns
+- Kernel-opened vfsFile resources have ino=0 (sentinel); code using resource.ino must handle ino===0 by resolving via vfs.getIno(path) — affects fd_filestat_get and any future per-fd stat operations
+- Test VFS helpers (SimpleVFS in shell-terminal.test.ts) must implement the full VirtualFileSystem interface including pread — kernel fdRead delegates through device-layer → vfs.pread()
 - @secure-exec/python package at packages/secure-exec-python/ owns PyodideRuntimeDriver (driver.ts) — deps: @secure-exec/core, pyodide
 - @secure-exec/browser package at packages/secure-exec-browser/ owns browser Web Worker runtime (driver.ts, runtime-driver.ts, worker.ts, worker-protocol.ts) — deps: @secure-exec/core, sucrase
 - @secure-exec/node package at packages/secure-exec-node/ owns V8-specific execution engine (execution.ts, isolate.ts, bridge-loader.ts, polyfills.ts) — deps: @secure-exec/core, isolated-vm, esbuild, node-stdlib-browser
@@ -1674,4 +1676,18 @@ PRD: ralph/kernel-hardening (46 stories)
   - Termios fields need updates in 4 places: interface, defaultTermios(), getTermios() deep copy, setTermios() setter
   - processInput fast-path condition must include any new input-processing flags (icrnl, etc.)
   - `for (const byte of data)` becomes `for (let byte of data)` when byte needs mutation (ICRNL conversion)
+---
+
+## 2026-03-18 - US-140
+- Fixed VFS initialization for interactive shell — resolved cat "Bad file descriptor" errors
+- Root cause 1: fd_filestat_get returned EBADF for kernel-opened vfsFile resources because ino=0 (sentinel) wasn't in the VFS inode cache. Fixed by resolving ino by path when ino===0, same as preopen resources.
+- Root cause 2: SimpleVFS test helper was missing `pread` (and other VFS interface methods). Kernel fdRead calls vfs.pread() for positional reads, which threw TypeError → EIO.
+- Added new test: "ls directory with known contents" — creates /data with alpha.txt and beta.txt, runs ls /data, verifies entries appear
+- Added missing VFS methods to SimpleVFS: pread, readlink, lstat, link, chmod, chown, utimes, truncate
+- Files changed: packages/runtime/wasmvm/src/wasi-polyfill.ts, packages/runtime/wasmvm/test/shell-terminal.test.ts
+- **Learnings for future iterations:**
+  - Kernel-opened files via createKernelFileIO().fdOpen use ino=0 as sentinel — any code using resource.ino must handle this (resolve by path via vfs.getIno)
+  - uu_cat calls fd_filestat_get (fstat) before reading — EBADF from fstat shows as "Bad file descriptor" not "I/O error"
+  - Test VFS helpers (SimpleVFS) must implement the full VirtualFileSystem interface including pread — kernel fdRead delegates through device-layer which calls vfs.pread()
+  - Pre-existing test failure: resource-exhaustion.test.ts > PTY adversarial stress > single large write — unrelated to this change
 ---
