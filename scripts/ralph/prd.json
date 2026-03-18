@@ -2106,7 +2106,7 @@
         "Tests pass"
       ],
       "priority": 125,
-      "passes": false,
+      "passes": true,
       "notes": "Audit H4 (partial gap). US-126 caps FD table and event listeners but not the active-handles.ts map. Spawning thousands of child processes or timers grows the map without bound."
     },
     {

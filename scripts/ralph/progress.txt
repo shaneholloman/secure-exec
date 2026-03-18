@@ -1596,3 +1596,20 @@ PRD: ralph/kernel-hardening (46 stories)
   - Budget defaults live in isolate-bootstrap.ts alongside other constants; undefined means unlimited for all budget fields
   - The "normal code" test intentionally omits resourceBudgets to exercise the default value path
 ---
+
+## 2026-03-18 - US-108
+- What was implemented: Added configurable max size cap (default 10000) to the ActiveHandles map, preventing unbounded growth from spawning thousands of child processes, timers, or servers
+- Files changed:
+  - packages/secure-exec-core/src/runtime-driver.ts — added `maxHandles` to ResourceBudgets interface
+  - packages/secure-exec-core/src/bridge/active-handles.ts — added `_maxHandles` declaration and cap enforcement in `_registerHandle` (skips check for re-registration of existing handle)
+  - packages/secure-exec-core/isolate-runtime/src/common/runtime-globals.d.ts — added `_maxHandles` global declaration
+  - packages/secure-exec-node/src/isolate-bootstrap.ts — added `maxHandles` to DriverDeps, added DEFAULT_MAX_HANDLES = 10_000
+  - packages/secure-exec-node/src/execution-driver.ts — imported DEFAULT_MAX_HANDLES, wired `maxHandles` through to deps
+  - packages/secure-exec-node/src/bridge-setup.ts — added `maxHandles` to deps Pick type, injects `_maxHandles` into isolate jail
+  - packages/secure-exec/tests/runtime-driver/node/resource-budgets.test.ts — added 2 tests: cap enforcement and slot reuse after removal
+- **Learnings for future iterations:**
+  - Active handle cap follows the same pattern as _maxTimers: host injects a number global into the bridge jail, bridge checks synchronously before registering
+  - _registerHandle allows re-registration of an existing ID without counting against the cap (idempotent set behavior)
+  - Testing handle cap directly via _registerHandle/_unregisterHandle globals from sandbox code is simpler and more reliable than testing through child_process.spawn (which has async lifecycle)
+  - The 5 failures in tests/runtime-driver/node/index.test.ts (ECONNREFUSED + upgrade) are pre-existing and unrelated
+---
