@@ -79,6 +79,7 @@ type BridgeDeps = Pick<
 	| "maxOutputBytes"
 	| "maxTimers"
 	| "maxChildProcesses"
+	| "maxHandles"
 	| "bridgeBase64TransferLimitBytes"
 	| "isolateJsonPayloadLimitBytes"
 	| "activeHttpServerIds"
@@ -238,6 +239,11 @@ export async function setupRequire(
 	// Inject maxTimers limit for bridge-side enforcement (synchronous check)
 	if (deps.maxTimers !== undefined) {
 		await jail.set("_maxTimers", deps.maxTimers, { copy: true });
+	}
+
+	// Inject maxHandles limit for bridge-side active handle cap
+	if (deps.maxHandles !== undefined) {
+		await jail.set("_maxHandles", deps.maxHandles, { copy: true });
 	}
 
 	// Set up host crypto references for secure randomness.

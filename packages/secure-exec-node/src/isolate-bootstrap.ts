@@ -45,6 +45,7 @@ export interface DriverDeps {
 	maxBridgeCalls?: number;
 	maxTimers?: number;
 	maxChildProcesses?: number;
+	maxHandles?: number;
 	budgetState: BudgetState;
 	activeHttpServerIds: Set<number>;
 	activeChildProcesses: Map<number, SpawnedProcess>;
@@ -66,6 +67,7 @@ export const MAX_CONFIGURED_PAYLOAD_BYTES = 64 * 1024 * 1024;
 export const PAYLOAD_LIMIT_ERROR_CODE = "ERR_SANDBOX_PAYLOAD_TOO_LARGE";
 export const RESOURCE_BUDGET_ERROR_CODE = "ERR_RESOURCE_BUDGET_EXCEEDED";
 export const DEFAULT_MAX_TIMERS = 10_000;
+export const DEFAULT_MAX_HANDLES = 10_000;
 export const DEFAULT_SANDBOX_CWD = "/root";
 export const DEFAULT_SANDBOX_HOME = "/root";
 export const DEFAULT_SANDBOX_TMPDIR = "/tmp";

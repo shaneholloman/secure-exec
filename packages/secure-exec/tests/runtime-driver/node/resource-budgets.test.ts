@@ -558,6 +558,88 @@ describe("NodeRuntime resource budgets", () => {
 		});
 	});
 
+	// -----------------------------------------------------------------------
+	// maxHandles
+	// -----------------------------------------------------------------------
+
+	describe("maxHandles", () => {
+		it("register maxHandles+1 handles — last one throws", async () => {
+			const capture = createConsoleCapture();
+			proc = createTestNodeRuntime({
+				onStdio: capture.onStdio,
+				resourceBudgets: { maxHandles: 3 },
+			});
+
+			const result = await proc.exec(`
+				let succeeded = 0;
+				let errors = 0;
+				for (let i = 0; i < 5; i++) {
+					try {
+						_registerHandle('test:' + i, 'test handle ' + i);
+						succeeded++;
+					} catch (e) {
+						if (e.message.includes('ERR_RESOURCE_BUDGET_EXCEEDED')) errors++;
+					}
+				}
+				// Cleanup registered handles so sandbox can exit
+				for (let i = 0; i < 3; i++) _unregisterHandle('test:' + i);
+				console.log('succeeded:' + succeeded);
+				console.log('errors:' + errors);
+			`);
+
+			expect(result.code).toBe(0);
+			const out = capture.stdout();
+			expect(out).toContain("succeeded:3");
+			expect(out).toContain("errors:2");
+		});
+
+		it("register handles, remove some, register more — works up to cap", async () => {
+			const capture = createConsoleCapture();
+			proc = createTestNodeRuntime({
+				onStdio: capture.onStdio,
+				resourceBudgets: { maxHandles: 3 },
+			});
+
+			const result = await proc.exec(`
+				let firstBatch = 0;
+				let secondBatch = 0;
+				let errors = 0;
+
+				// First batch: register 3 handles (fills cap)
+				for (let i = 0; i < 3; i++) {
+					try {
+						_registerHandle('batch1:' + i, 'first batch ' + i);
+						firstBatch++;
+					} catch (e) { errors++; }
+				}
+
+				// Remove first batch handles (frees slots)
+				for (let i = 0; i < 3; i++) _unregisterHandle('batch1:' + i);
+
+				// Second batch: register 3 more (slots freed)
+				for (let i = 0; i < 3; i++) {
+					try {
+						_registerHandle('batch2:' + i, 'second batch ' + i);
+						secondBatch++;
+					} catch (e) { errors++; }
+				}
+
+				// Cleanup
+				for (let i = 0; i < 3; i++) _unregisterHandle('batch2:' + i);
+
+				console.log('firstBatch:' + firstBatch);
+				console.log('secondBatch:' + secondBatch);
+				console.log('errors:' + errors);
+			`);
+
+			expect(result.code).toBe(0);
+			const out = capture.stdout();
+			expect(out).toContain("firstBatch:3");
+			expect(out).toContain("secondBatch:3");
+			expect(out).toContain("errors:0");
+		});
+	});
+
 	describe("host timer cleanup", () => {
 		it("clears host timers on dispose after normal execution", async () => {
 			proc = createTestNodeRuntime({});

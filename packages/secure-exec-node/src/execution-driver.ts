@@ -5,7 +5,7 @@ import { createCommandExecutorStub, createFsStub, createNetworkStub, filterEnv, 
 import { executeWithRuntime } from "./execution.js";
 import type { NetworkAdapter, RuntimeDriver } from "@secure-exec/core";
 import type { StdioHook, ExecOptions, ExecResult, RunResult, TimingMitigation } from "@secure-exec/core/internal/shared/api-types";
-import { type DriverDeps, type NodeExecutionDriverOptions, createBudgetState, clearActiveHostTimers, killActiveChildProcesses, normalizePayloadLimit, getExecutionTimeoutMs, getTimingMitigation, DEFAULT_BRIDGE_BASE64_TRANSFER_BYTES, DEFAULT_ISOLATE_JSON_PAYLOAD_BYTES, DEFAULT_MAX_TIMERS, DEFAULT_SANDBOX_CWD, DEFAULT_SANDBOX_HOME, DEFAULT_SANDBOX_TMPDIR } from "./isolate-bootstrap.js";
+import { type DriverDeps, type NodeExecutionDriverOptions, createBudgetState, clearActiveHostTimers, killActiveChildProcesses, normalizePayloadLimit, getExecutionTimeoutMs, getTimingMitigation, DEFAULT_BRIDGE_BASE64_TRANSFER_BYTES, DEFAULT_ISOLATE_JSON_PAYLOAD_BYTES, DEFAULT_MAX_TIMERS, DEFAULT_MAX_HANDLES, DEFAULT_SANDBOX_CWD, DEFAULT_SANDBOX_HOME, DEFAULT_SANDBOX_TMPDIR } from "./isolate-bootstrap.js";
 import { shouldRunAsESM } from "./module-resolver.js";
 import { precompileDynamicImports, runESM, setupDynamicImport } from "./esm-compiler.js";
 import { setupConsole, setupRequire, setupESMGlobals } from "./bridge-setup.js";
@@ -78,6 +78,7 @@ export class NodeExecutionDriver implements RuntimeDriver {
 			maxBridgeCalls: budgets?.maxBridgeCalls,
 			maxTimers: budgets?.maxTimers ?? DEFAULT_MAX_TIMERS,
 			maxChildProcesses: budgets?.maxChildProcesses,
+			maxHandles: budgets?.maxHandles ?? DEFAULT_MAX_HANDLES,
 			budgetState: createBudgetState(),
 			activeHttpServerIds: new Set(),
 			activeChildProcesses: new Map(),
