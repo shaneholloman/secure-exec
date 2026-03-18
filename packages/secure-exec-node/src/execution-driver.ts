@@ -114,6 +114,17 @@ export class NodeExecutionDriver implements RuntimeDriver {
 	async __unsafeCreateContext(options: { env?: Record<string, string>; cwd?: string; filePath?: string } = {}): Promise<ivm.Context> {
 		if (this.disposed) throw new Error("NodeRuntime has been disposed");
 		this.deps.budgetState = createBudgetState();
+		// Clear module caches to prevent cache poisoning across contexts
+		this.deps.esmModuleCache.clear();
+		this.deps.esmModuleReverseCache.clear();
+		this.deps.dynamicImportCache.clear();
+		this.deps.dynamicImportPending.clear();
+		this.deps.resolutionCache.resolveResults.clear();
+		this.deps.resolutionCache.packageJsonResults.clear();
+		this.deps.resolutionCache.existsResults.clear();
+		this.deps.resolutionCache.statResults.clear();
+		this.deps.moduleFormatCache.clear();
+		this.deps.packageTypeCache.clear();
 		const context = await this.deps.isolate.createContext();
 		const jail = context.global;
 		await jail.set("global", jail.derefInto());

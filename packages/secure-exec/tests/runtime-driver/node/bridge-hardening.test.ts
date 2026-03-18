@@ -1,3 +1,4 @@
+import ivm from "isolated-vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { allowAllFs, createInMemoryFileSystem } from "../../../src/index.js";
 import type { NodeRuntime } from "../../../src/index.js";
@@ -322,6 +323,60 @@ describe("bridge-side resource hardening", () => {
 			}
 			// Even if timeout killed it, we prove it didn't spin infinitely
 			expect(result.code === 0 || result.code !== undefined).toBe(true);
+		});
+	});
+
+	// -------------------------------------------------------------------
+	// Module cache isolation across __unsafeCreateContext calls
+	// -------------------------------------------------------------------
+
+	describe("module cache isolation", () => {
+		it("__unsafeCreateContext clears module caches between contexts", async () => {
+			const fs = createInMemoryFileSystem();
+			await fs.writeFile("/app/version.js", new TextEncoder().encode(
+				`module.exports = { value: "v1" };`
+			));
+
+			proc = createTestNodeRuntime({
+				filesystem: fs,
+				permissions: allowAllFs,
+			});
+
+			const unsafeProc = proc as NodeRuntime & {
+				__unsafeIsoalte: ivm.Isolate;
+				__unsafeCreateContext(options?: {
+					env?: Record<string, string>;
+					cwd?: string;
+					filePath?: string;
+				}): Promise<ivm.Context>;
+			};
+
+			// First context — require the module (populates cache)
+			const ctx1 = await unsafeProc.__unsafeCreateContext({ cwd: "/app" });
+			const script1 = await unsafeProc.__unsafeIsoalte.compileScript(
+				`const v = require('/app/version.js'); globalThis.__result = v.value;`,
+				{ filename: "/app/test.js" },
+			);
+			await script1.run(ctx1);
+			const result1 = await ctx1.eval(`globalThis.__result`);
+			expect(result1).toBe("v1");
+			ctx1.release();
+
+			// Modify the VFS file — if cache is stale, next context will see "v1"
+			await fs.writeFile("/app/version.js", new TextEncoder().encode(
+				`module.exports = { value: "v2" };`
+			));
+
+			// Second context — should see "v2" because caches were cleared
+			const ctx2 = await unsafeProc.__unsafeCreateContext({ cwd: "/app" });
+			const script2 = await unsafeProc.__unsafeIsoalte.compileScript(
+				`const v = require('/app/version.js'); globalThis.__result = v.value;`,
+				{ filename: "/app/test.js" },
+			);
+			await script2.run(ctx2);
+			const result2 = await ctx2.eval(`globalThis.__result`);
+			expect(result2).toBe("v2");
+			ctx2.release();
 		});
 	});
 });
