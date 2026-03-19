@@ -2989,7 +2989,7 @@
         "Tests pass"
       ],
       "priority": 173,
-      "passes": false,
+      "passes": true,
       "notes": "Web Crypto is increasingly used by modern packages. Currently all subtle.* methods throw."
     },
     {
@@ -3006,7 +3006,7 @@
         "Tests pass (project-matrix)"
       ],
       "priority": 174,
-      "passes": false,
+      "passes": true,
       "notes": "ssh2 exercises crypto, Buffer, streams, events, and net module paths."
     },
     {
@@ -3023,7 +3023,7 @@
         "Tests pass (project-matrix)"
       ],
       "priority": 175,
-      "passes": false,
+      "passes": true,
       "notes": "Wraps ssh2. Tests the same subsystems plus additional fs-like APIs."
     },
     {
