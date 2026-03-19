@@ -2062,3 +2062,15 @@ PRD: ralph/kernel-hardening (46 stories)
   - proc_spawn host function bridges WASM shell → kernel spawn for cross-runtime dispatch
   - FD inheritance tests at packages/secure-exec/tests/kernel/fd-inheritance.test.ts
 ---
+
+## 2026-03-18 - US-161
+- Next.js project-matrix fixture already existed and passes all 25 non-kernel project-matrix tests
+- Fixture structure: pages/index.js (SSR page), pages/api/hello.js (API route), src/index.js (entry with ensureBuild + manifest check)
+- Next.js already in docs/nodejs-compatibility.mdx tested packages table
+- Kernel e2e test (e2e-project-matrix.test.ts) fails for ALL 23 fixtures (not nextjs-specific) — pre-existing infrastructure issue: "WARN could not retrieve pid for child process" with exit code 1
+- No code changes needed — fixture and docs were already complete
+- **Learnings for future iterations:**
+  - Kernel e2e project-matrix (e2e-project-matrix.test.ts) is broken for all fixtures — all 23 fail with "WARN could not retrieve pid for child process"
+  - This is separate from the non-kernel project-matrix.test.ts which works correctly
+  - Build-step fixtures (next build, astro build) use execSync from entry script with ensureBuild() pattern
+---

@@ -2765,7 +2765,7 @@
         "Tests pass"
       ],
       "priority": 161,
-      "passes": false,
+      "passes": true,
       "notes": "Same pattern as Express (US-036) and Fastify (US-037) fixtures. Next.js exercises SSR, webpack/turbopack compilation, fs access for pages, and dynamic imports \u2014 all stress points for the sandbox."
     },
     {
