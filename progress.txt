@@ -2481,3 +2481,17 @@ PRD: ralph/kernel-hardening (46 stories)
   - Changing execution.ts requires `pnpm run build` (or turbo build) before tests pick up the change — vitest resolves the compiled output, not TypeScript source
   - The WARN "could not retrieve pid for child process" appears on stderr for all node -e invocations — tests must tolerate it
 ---
+
+## 2026-03-19 - US-197
+- What was implemented: Verified tree command works correctly in both kernel.exec() and interactive shell; no code fix needed (tree never hung — hypothesized stdin blocking does not occur because tree.rs never reads stdin, and the WASM polyfill only blocks on stdin when fd_read(0) is actually called). Added comprehensive test suite covering all acceptance criteria.
+- Files changed:
+  - packages/secure-exec/tests/kernel/tree-test.test.ts — 6 new tests: kernel.exec tree / returns within 5s, tree /nonexistent returns non-zero, 3-level nested directory rendering, empty directory minimal output, interactive shell tree completes with prompt return, stdin-empty-PTY non-hang verification
+  - scripts/ralph/prd.json — marked US-197 as passes: true
+- **Learnings for future iterations:**
+  - tree.rs only uses io::stdout() and fs::read_dir() — no stdin reads → PTY stdin blocking is not an issue for tree
+  - Interactive shell tests must use shell.onData = fn (property setter), not shell.onData(fn) — openShell returns a ShellHandle with getter/setter, not EventEmitter
+  - Shell prompt text is "sh-0.4$ " — use '$ ' substring match for prompt detection in tests
+  - Tree summary output uses singular/plural: "1 directory" vs "N directories", "1 file" vs "N files" — match with regex /\d+ director/ and /\d+ file/
+  - Interactive shell cleanup: send 'exit\n' and race shell.wait() with a timeout to avoid test hangs from dispose()
+  - kernel.exec('tree /') runs in under 1 second; interactive shell 'tree /' completes within 200ms after command is dispatched
+---
