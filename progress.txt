@@ -1883,3 +1883,16 @@ PRD: ralph/kernel-hardening (46 stories)
   - Browser runtime tests are skipped in Node CI (IS_BROWSER_ENV check); unit-testable payload logic can be verified structurally
   - BrowserRuntimeDriver validates "unsupported" options in BROWSER_OPTION_VALIDATORS array — remove entries when adding support
 ---
+
+## 2026-03-18 - US-144
+- What was implemented: Verified browser Worker sandbox API restrictions already in place
+- Implementation was already complete in worker.ts: dangerous APIs (XMLHttpRequest, WebSocket, importScripts, indexedDB, caches, BroadcastChannel) blocked with ReferenceError-throwing getters, self.onmessage locked as non-configurable, self.postMessage blocked with TypeError getter
+- Tests already exist in runtime-driver/browser/runtime.test.ts covering: importScripts, WebSocket, onmessage overwrite, fetch, and bridge API functionality after hardening
+- Files changed:
+  - prd.json — marked US-144 as passes: true
+- **Learnings for future iterations:**
+  - Browser runtime tests (runtime.test.ts) are behind `describe.skipIf(!IS_BROWSER_ENV)` — they only run in actual browser environments, not Node.js vitest
+  - permission-validation.test.ts tests run in Node.js and cover callback sanitization (rejecting XMLHttpRequest, importScripts in permission callbacks)
+  - Worker hardening order: bridge setup → dangerous API blocking → onmessage lock → postMessage block → set initialized
+  - Real postMessage saved as `_realPostMessage` in closure before any sandbox code can touch it
+---
