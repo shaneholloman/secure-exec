@@ -170,6 +170,109 @@ describe.skipIf(wasmSkip)('cross-runtime exec: node', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Node kernel.exec() stderr tests
+// ---------------------------------------------------------------------------
+
+describe.skipIf(wasmSkip)('cross-runtime exec: node stderr', () => {
+  let ctx: IntegrationKernelResult;
+
+  afterEach(async () => {
+    await ctx?.dispose();
+  });
+
+  it('kernel.exec node -e with undefined var returns ReferenceError on stderr', async () => {
+    ctx = await createIntegrationKernel({ runtimes: ['wasmvm', 'node'] });
+    const result = await ctx.kernel.exec('node -e "lskdjf"');
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('ReferenceError');
+  });
+
+  it('kernel.exec node -e throw Error returns message on stderr', async () => {
+    ctx = await createIntegrationKernel({ runtimes: ['wasmvm', 'node'] });
+    const result = await ctx.kernel.exec('node -e "throw new Error(\'boom\')"');
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('boom');
+  });
+
+  it('kernel.exec node -e with syntax error returns SyntaxError on stderr', async () => {
+    ctx = await createIntegrationKernel({ runtimes: ['wasmvm', 'node'] });
+    const result = await ctx.kernel.exec('node -e "({"');
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('SyntaxError');
+  });
+
+  it('kernel.exec node -e console.error returns stderr', async () => {
+    ctx = await createIntegrationKernel({ runtimes: ['wasmvm', 'node'] });
+    const result = await ctx.kernel.exec('node -e "console.error(\'ERRMSG\')"');
+    expect(result.stderr).toContain('ERRMSG');
+    expect(result.exitCode).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Node cross-runtime terminal: stderr tests
+// ---------------------------------------------------------------------------
+
+describe.skipIf(wasmSkip)('cross-runtime terminal: node stderr', () => {
+  let harness: TerminalHarness;
+  let ctx: IntegrationKernelResult;
+
+  afterEach(async () => {
+    await harness?.dispose();
+    await ctx?.dispose();
+  });
+
+  it('node -e with undefined var shows ReferenceError on terminal', async () => {
+    ctx = await createIntegrationKernel({ runtimes: ['wasmvm', 'node'] });
+    harness = new TerminalHarness(ctx.kernel);
+
+    await harness.waitFor(PROMPT);
+    await harness.type('node -e "lskdjf"\n');
+    await harness.waitFor(PROMPT, 2, 10_000);
+
+    const screen = harness.screenshotTrimmed();
+    expect(screen).toContain('ReferenceError');
+  }, 15_000);
+
+  it('node -e throw Error shows error message on terminal', async () => {
+    ctx = await createIntegrationKernel({ runtimes: ['wasmvm', 'node'] });
+    harness = new TerminalHarness(ctx.kernel);
+
+    await harness.waitFor(PROMPT);
+    await harness.type('node -e "throw new Error(\'boom\')"\n');
+    await harness.waitFor(PROMPT, 2, 10_000);
+
+    const screen = harness.screenshotTrimmed();
+    expect(screen).toContain('boom');
+  }, 15_000);
+
+  it('node -e syntax error shows SyntaxError on terminal', async () => {
+    ctx = await createIntegrationKernel({ runtimes: ['wasmvm', 'node'] });
+    harness = new TerminalHarness(ctx.kernel);
+
+    await harness.waitFor(PROMPT);
+    await harness.type('node -e "({"\n');
+    await harness.waitFor(PROMPT, 2, 10_000);
+
+    const screen = harness.screenshotTrimmed();
+    expect(screen).toContain('SyntaxError');
+  }, 15_000);
+
+  it('stderr callback chain: NodeRuntimeDriver → ctx.onStderr → PTY slave', async () => {
+    ctx = await createIntegrationKernel({ runtimes: ['wasmvm', 'node'] });
+    harness = new TerminalHarness(ctx.kernel);
+
+    await harness.waitFor(PROMPT);
+    // console.error goes through onStdio → ctx.onStderr → PTY write
+    await harness.type('node -e "console.error(\'STDERRTEST\')"\n');
+    await harness.waitFor(PROMPT, 2, 10_000);
+
+    const screen = harness.screenshotTrimmed();
+    expect(screen).toContain('STDERRTEST');
+  }, 15_000);
+});
+
+// ---------------------------------------------------------------------------
 // Python cross-runtime terminal tests
 // ---------------------------------------------------------------------------
 

@@ -278,7 +278,10 @@ export async function executeWithRuntime<T = unknown>(
 			};
 		}
 
-		const errMessage = err instanceof Error ? err.message : String(err);
+		// Include error class name (e.g. "SyntaxError: ...") to match Node.js output
+		const errMessage = err instanceof Error
+			? (err.name && err.name !== 'Error' ? `${err.name}: ${err.message}` : err.message)
+			: String(err);
 		const exitMatch = errMessage.match(/process\.exit\((\d+)\)/);
 
 		if (exitMatch) {

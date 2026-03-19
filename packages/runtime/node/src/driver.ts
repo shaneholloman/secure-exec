@@ -472,6 +472,13 @@ class NodeRuntimeDriver implements RuntimeDriver {
         },
       });
 
+      // Emit errorMessage as stderr (covers ReferenceError, SyntaxError, throw)
+      if (result.errorMessage) {
+        const errBytes = new TextEncoder().encode(result.errorMessage + '\n');
+        ctx.onStderr?.(errBytes);
+        proc.onStderr?.(errBytes);
+      }
+
       // Cleanup isolate
       executionDriver.dispose();
       this._activeDrivers.delete(ctx.pid);
