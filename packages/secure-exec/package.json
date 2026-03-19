@@ -37,6 +37,7 @@
     "test:integration:node": "pnpm run test:test-suite && pnpm run test:runtime-driver",
     "test:integration:browser": "vitest run --config vitest.browser.config.ts tests/test-suite/node.test.ts tests/runtime-driver/browser/runtime.test.ts",
     "test:project-matrix": "vitest run tests/project-matrix.test.ts",
+    "test:e2e-docker": "vitest run tests/e2e-docker.test.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

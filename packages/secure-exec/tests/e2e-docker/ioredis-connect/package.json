@@ -1,0 +1,8 @@
+{
+	"name": "e2e-docker-ioredis-connect",
+	"private": true,
+	"type": "commonjs",
+	"dependencies": {
+		"ioredis": "5.4.2"
+	}
+}

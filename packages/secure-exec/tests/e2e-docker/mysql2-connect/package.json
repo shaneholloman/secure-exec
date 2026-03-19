@@ -1,0 +1,8 @@
+{
+	"name": "e2e-docker-mysql2-connect",
+	"private": true,
+	"type": "commonjs",
+	"dependencies": {
+		"mysql2": "3.11.5"
+	}
+}

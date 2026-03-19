@@ -1,0 +1,9 @@
+{
+	"entry": "src/index.js",
+	"expectation": "fail",
+	"services": ["mysql"],
+	"fail": {
+		"code": 1,
+		"stderrIncludes": "net.connect is not supported in sandbox"
+	}
+}
