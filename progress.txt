@@ -2049,3 +2049,16 @@ PRD: ralph/kernel-hardening (46 stories)
   - When a story's root cause is fixed by a prerequisite story, verify with actual test runs rather than investigating code
   - Project-matrix tests can be run individually with -t "fixture-name" filter
 ---
+
+## 2026-03-18 - US-160
+- Kernel shell I/O redirection operators (< > >>) already work — all 5 FD inheritance tests pass
+- brush-shell (Rust WASM) handles all shell parsing and redirection natively via setup_redirect() in brush-core/interp.rs
+- Pipe operators (|) also handled within brush-shell, cross-runtime via proc_spawn host function
+- No TypeScript-level changes needed — brush-shell handles dup2/open/close internally before spawning child processes
+- Story notes mentioned failing tests but they were already fixed by prior kernel FD infrastructure work
+- **Learnings for future iterations:**
+  - brush-shell handles ALL shell syntax (pipes, redirects, etc.) in Rust WASM — no TypeScript shell parser exists
+  - kernel.exec() passes command string verbatim to `sh -c <cmd>` — no TS-level parsing
+  - proc_spawn host function bridges WASM shell → kernel spawn for cross-runtime dispatch
+  - FD inheritance tests at packages/secure-exec/tests/kernel/fd-inheritance.test.ts
+---
