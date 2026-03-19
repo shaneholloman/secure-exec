@@ -135,9 +135,7 @@ export async function fetch(input: string | URL | Request, options: FetchOptions
     body: options.body || null,
   });
 
-  const responseJson = await _networkFetchRaw.apply(undefined, [resolvedUrl, optionsJson], {
-    result: { promise: true },
-  });
+  const responseJson = await _networkFetchRaw(String(url), optionsJson);
   const response = JSON.parse(responseJson) as {
     ok: boolean;
     status: number;
@@ -324,8 +322,7 @@ export const dns = {
       cb = options as DnsCallback;
     }
 
-    _networkDnsLookupRaw
-      .apply(undefined, [hostname], { result: { promise: true } })
+    _networkDnsLookupRaw(hostname)
       .then((resultJson) => {
         const result = JSON.parse(resultJson) as { error?: string; code?: string; address?: string; family?: number };
         if (result.error) {
@@ -775,9 +772,7 @@ export class ClientRequest {
         ...tls,
       });
 
-      const responseJson = await _networkHttpRequestRaw.apply(undefined, [url, optionsJson], {
-        result: { promise: true },
-      });
+      const responseJson = await _networkHttpRequestRaw(url, optionsJson);
       const response = JSON.parse(responseJson) as {
         headers?: Record<string, string>;
         url?: string;
@@ -1415,10 +1410,8 @@ class Server {
       );
     }
 
-    const resultJson = await _networkHttpServerListenRaw.apply(
-      undefined,
-      [JSON.stringify({ serverId: this._serverId, port, hostname })],
-      { result: { promise: true } }
+    const resultJson = await _networkHttpServerListenRaw(
+      JSON.stringify({ serverId: this._serverId, port, hostname }),
     );
     const result = JSON.parse(resultJson) as SerializedServerListenResult;
     this._address = result.address;
@@ -1465,9 +1458,7 @@ class Server {
           await this._listenPromise;
         }
         if (this.listening && typeof _networkHttpServerCloseRaw !== "undefined") {
-          await _networkHttpServerCloseRaw.apply(undefined, [this._serverId], {
-            result: { promise: true },
-          });
+          await _networkHttpServerCloseRaw(this._serverId);
         }
         this.listening = false;
         this._address = null;
