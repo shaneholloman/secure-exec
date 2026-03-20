@@ -410,8 +410,8 @@
         "Tests pass"
       ],
       "priority": 23,
-      "passes": false,
-      "notes": "Only TEXT and SERIAL are tested. Type parsing in node-pg relies on Buffer, crypto, and type parser functions that the sandbox may not fully support. JSON/JSONB round-trip is especially important for real-world apps."
+      "passes": true,
+      "notes": "Completed. Fixture pg-types creates table with JSON, JSONB, TIMESTAMPTZ, BOOLEAN, BYTEA, INTEGER[], TEXT[], UUID, NUMERIC columns. Inserts fixed test values, reads back, verifies JavaScript types (object for JSON, Date for timestamp, Buffer for bytea, Array for arrays). Host and sandbox produce identical output."
     },
     {
       "id": "US-024",

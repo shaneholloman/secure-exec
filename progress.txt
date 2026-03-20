@@ -2751,3 +2751,14 @@ PRD: ralph/kernel-hardening (46 stories)
   - Concurrent queries via Promise.all through the pool work correctly — the sandbox handles multiple simultaneous TCP connections through the net bridge
   - pg-pool fixture follows the exact same pattern as pg-connect (same pg version, same env vars, same error handling)
 ---
+
+## 2026-03-19 - US-023
+- Added pg-types e2e-docker fixture for data type coverage
+- Fixture creates table with JSON, JSONB, TIMESTAMPTZ, BOOLEAN, BYTEA, INTEGER[], TEXT[], UUID, NUMERIC columns
+- Inserts fixed deterministic values, reads back, verifies JavaScript types (typeof, instanceof, isArray, isBuffer)
+- Files changed: packages/secure-exec/tests/e2e-docker/pg-types/{package.json,fixture.json,src/index.js}
+- **Learnings for future iterations:**
+  - pg type parsers work correctly through the sandbox — JSON/JSONB return objects, TIMESTAMPTZ returns Date, BYTEA returns Buffer, arrays return Array, UUID/NUMERIC return strings
+  - Buffer round-trip through BYTEA works via parameterized queries ($1) — pg handles Buffer serialization to bytea wire format in user-space JS
+  - No additional bridge fixes needed for type parsing — all type coercion happens in pg's JS type parser code
+---
