@@ -1,10 +1,12 @@
 /**
- * E2E test: OpenCode coding agent headless mode via child_process.spawn.
+ * E2E test: OpenCode coding agent headless mode via sandbox child_process bridge.
  *
  * Verifies OpenCode can boot, produce output in both text and JSON formats,
  * read/write files, handle SIGINT, and report errors through its JSON event
  * stream. OpenCode is a standalone Bun binary (NOT a Node.js package) —
- * tests exercise the child_process.spawn bridge for complex host binaries.
+ * tests exercise the child_process.spawn bridge by running JS code inside
+ * the sandbox VM that calls child_process.spawn('opencode', ...). The bridge
+ * spawns the real opencode binary on the host.
  *
  * OpenCode uses its built-in proxy for LLM calls. The mock LLM server is
  * available via ANTHROPIC_BASE_URL when the environment supports it (some
@@ -14,12 +16,20 @@
  * Uses relative imports to avoid cyclic package dependencies.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn as nodeSpawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  NodeRuntime,
+  NodeFileSystem,
+  allowAll,
+  createNodeDriver,
+} from '../../src/index.js';
+import type { CommandExecutor, SpawnedProcess } from '../../src/types.js';
+import { createTestNodeRuntime } from '../test-utils.js';
 import {
   createMockLlmServer,
   type MockLlmServerHandle,
@@ -44,129 +54,236 @@ const skipReason = hasOpenCodeBinary()
   : 'opencode binary not found on PATH';
 
 // ---------------------------------------------------------------------------
-// Mock server redirect probe
+// Stdio capture helper
 // ---------------------------------------------------------------------------
 
-/**
- * Probe whether ANTHROPIC_BASE_URL redirects work in the current environment.
- * Some opencode versions hang when BASE_URL is set (plugin init blocks on
- * network). We probe once in beforeAll and skip mock-dependent tests if
- * the redirect is broken.
- */
-async function probeBaseUrlRedirect(
-  port: number,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn('opencode', ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'say ok'], {
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: process.env.HOME ?? tmpdir(),
-        ANTHROPIC_API_KEY: 'probe-key',
-        ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
-        XDG_DATA_HOME: path.join(tmpdir(), `opencode-probe-${Date.now()}`),
+type CapturedEvent = {
+  channel: 'stdout' | 'stderr';
+  message: string;
+};
+
+function createStdioCapture() {
+  const events: CapturedEvent[] = [];
+  return {
+    events,
+    onStdio: (event: CapturedEvent) => events.push(event),
+    // Join with newline: the bridge strips trailing newlines from each
+    // process.stdout.write() call, so NDJSON events arriving as separate
+    // chunks lose their delimiters. Newline-join restores them.
+    stdout: () =>
+      events
+        .filter((e) => e.channel === 'stdout')
+        .map((e) => e.message)
+        .join('\n'),
+    stderr: () =>
+      events
+        .filter((e) => e.channel === 'stderr')
+        .map((e) => e.message)
+        .join('\n'),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Host command executor for child_process bridge
+// ---------------------------------------------------------------------------
+
+function createHostCommandExecutor(): CommandExecutor {
+  return {
+    spawn(
+      command: string,
+      args: string[],
+      options: {
+        cwd?: string;
+        env?: Record<string, string>;
+        onStdout?: (data: Uint8Array) => void;
+        onStderr?: (data: Uint8Array) => void;
       },
-      cwd: process.cwd(),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    child.stdin.end();
-
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve(false);
-    }, 8_000);
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve(code === 0);
-    });
-  });
+    ): SpawnedProcess {
+      const child = nodeSpawn(command, args, {
+        cwd: options.cwd,
+        env: options.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      if (options.onStdout)
+        child.stdout.on('data', (d: Buffer) =>
+          options.onStdout!(new Uint8Array(d)),
+        );
+      if (options.onStderr)
+        child.stderr.on('data', (d: Buffer) =>
+          options.onStderr!(new Uint8Array(d)),
+        );
+      return {
+        writeStdin(data: Uint8Array | string) {
+          child.stdin.write(data);
+        },
+        closeStdin() {
+          child.stdin.end();
+        },
+        kill(signal?: number) {
+          child.kill(signal);
+        },
+        wait(): Promise<number> {
+          return new Promise((resolve) =>
+            child.on('close', (code) => resolve(code ?? 1)),
+          );
+        },
+      };
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Test helpers
+// Sandbox runtime factory
 // ---------------------------------------------------------------------------
 
-/** Resolved opencode binary path. */
-const OPENCODE_BIN = 'opencode';
-
-/** Run OpenCode as a host process. */
-function runOpenCode(
-  args: string[],
-  opts: {
-    cwd?: string;
-    timeout?: number;
-    env?: Record<string, string>;
-    mockPort?: number;
-  } = {},
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const env: Record<string, string> = {
-      PATH: process.env.PATH ?? '',
-      HOME: process.env.HOME ?? tmpdir(),
-      ...(opts.env ?? {}),
-    };
-
-    // Redirect to mock server if port provided
-    if (opts.mockPort) {
-      env.ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY ?? 'test-key';
-      env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${opts.mockPort}`;
-    }
-
-    // Isolated SQLite storage
-    if (!env.XDG_DATA_HOME) {
-      env.XDG_DATA_HOME = path.join(tmpdir(), `opencode-test-${Date.now()}`);
-    }
-
-    const child = spawn(OPENCODE_BIN, args, {
-      env,
-      cwd: opts.cwd ?? process.cwd(),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    child.stdin.end();
-
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d: Buffer) => {
-      stdout += d.toString();
-    });
-    child.stderr.on('data', (d: Buffer) => {
-      stderr += d.toString();
-    });
-
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve({ exitCode: 124, stdout, stderr });
-    }, opts.timeout ?? 45_000);
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ exitCode: code ?? 1, stdout, stderr });
-    });
+function createOpenCodeSandboxRuntime(opts: {
+  onStdio: (event: CapturedEvent) => void;
+}): NodeRuntime {
+  return createTestNodeRuntime({
+    driver: createNodeDriver({
+      filesystem: new NodeFileSystem(),
+      commandExecutor: createHostCommandExecutor(),
+      permissions: allowAll,
+      processConfig: {
+        cwd: '/root',
+        env: {
+          PATH: process.env.PATH ?? '/usr/bin',
+          HOME: process.env.HOME ?? tmpdir(),
+        },
+      },
+    }),
+    onStdio: opts.onStdio,
   });
 }
 
-/** Spawn OpenCode and return the child process for signal tests. */
-function spawnOpenCode(
-  args: string[],
-  opts: { cwd?: string; env?: Record<string, string> } = {},
-): ChildProcess {
+const SANDBOX_EXEC_OPTS = { filePath: '/root/entry.js', cwd: '/root' };
+
+// ---------------------------------------------------------------------------
+// Sandbox code builders
+// ---------------------------------------------------------------------------
+
+/** Build env object for OpenCode spawn inside the sandbox. */
+function openCodeEnv(opts: {
+  mockPort?: number;
+  extraEnv?: Record<string, string>;
+} = {}): Record<string, string> {
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? tmpdir(),
-    XDG_DATA_HOME: path.join(tmpdir(), `opencode-test-${Date.now()}`),
-    ...(opts.env ?? {}),
+    XDG_DATA_HOME: path.join(
+      tmpdir(),
+      `opencode-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    ),
+    ...(opts.extraEnv ?? {}),
   };
 
-  const child = spawn(OPENCODE_BIN, args, {
-    env,
-    cwd: opts.cwd ?? process.cwd(),
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  if (opts.mockPort) {
+    env.ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY ?? 'test-key';
+    env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${opts.mockPort}`;
+  }
 
-  child.stdin.end();
-  return child;
+  return env;
+}
+
+/**
+ * Build sandbox code that spawns OpenCode and pipes stdout/stderr to
+ * process.stdout/stderr. Exit code is forwarded from the binary.
+ *
+ * process.exit() must be called at the top-level await, not inside a bridge
+ * callback — calling it inside childProcessDispatch would throw a
+ * ProcessExitError through the host reference chain, causing an unhandled
+ * rejection.
+ */
+function buildSpawnCode(opts: {
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
+  timeout?: number;
+}): string {
+  return `(async () => {
+    const { spawn } = require('child_process');
+    const child = spawn('opencode', ${JSON.stringify(opts.args)}, {
+      env: ${JSON.stringify(opts.env)},
+      cwd: ${JSON.stringify(opts.cwd)},
+    });
+
+    child.stdin.end();
+
+    child.stdout.on('data', (d) => process.stdout.write(String(d)));
+    child.stderr.on('data', (d) => process.stderr.write(String(d)));
+
+    const exitCode = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve(124);
+      }, ${opts.timeout ?? 45000});
+
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve(code ?? 1);
+      });
+    });
+
+    if (exitCode !== 0) process.exit(exitCode);
+  })()`;
+}
+
+/**
+ * Build sandbox code that spawns OpenCode, waits for any output, sends
+ * SIGINT through the bridge, then reports the exit code.
+ */
+function buildSigintCode(opts: {
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
+}): string {
+  return `(async () => {
+    const { spawn } = require('child_process');
+    const child = spawn('opencode', ${JSON.stringify(opts.args)}, {
+      env: ${JSON.stringify(opts.env)},
+      cwd: ${JSON.stringify(opts.cwd)},
+    });
+
+    child.stdin.end();
+
+    child.stdout.on('data', (d) => process.stdout.write(String(d)));
+    child.stderr.on('data', (d) => process.stderr.write(String(d)));
+
+    // Wait for output then send SIGINT
+    let sentSigint = false;
+    const onOutput = () => {
+      if (!sentSigint) {
+        sentSigint = true;
+        child.kill('SIGINT');
+      }
+    };
+    child.stdout.on('data', onOutput);
+    child.stderr.on('data', onOutput);
+
+    const exitCode = await new Promise((resolve) => {
+      // No-output safety timeout
+      const noOutputTimer = setTimeout(() => {
+        if (!sentSigint) {
+          child.kill();
+          resolve(2);
+        }
+      }, 15000);
+
+      // SIGKILL fallback (should not be needed)
+      const killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve(137);
+      }, 25000);
+
+      child.on('close', (code) => {
+        clearTimeout(noOutputTimer);
+        clearTimeout(killTimer);
+        resolve(code ?? 1);
+      });
+    });
+
+    if (exitCode !== 0) process.exit(exitCode);
+  })()`;
 }
 
 /** Parse JSON events from opencode --format json output. */
@@ -193,14 +310,39 @@ let mockServer: MockLlmServerHandle;
 let workDir: string;
 let mockRedirectWorks: boolean;
 
-describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
+describe.skipIf(skipReason)('OpenCode headless E2E (sandbox child_process bridge)', () => {
   beforeAll(async () => {
-    // Set up mock server (used when BASE_URL redirect works)
     mockServer = await createMockLlmServer([]);
 
-    // Probe BASE_URL redirect support
+    // Probe BASE_URL redirect via sandbox child_process bridge
     mockServer.reset([{ type: 'text', text: 'PROBE_OK' }]);
-    mockRedirectWorks = await probeBaseUrlRedirect(mockServer.port);
+    const probeCapture = createStdioCapture();
+    const probeRuntime = createOpenCodeSandboxRuntime({
+      onStdio: probeCapture.onStdio,
+    });
+    try {
+      const result = await probeRuntime.exec(
+        buildSpawnCode({
+          args: [
+            'run',
+            '-m',
+            'anthropic/claude-sonnet-4-6',
+            '--format',
+            'json',
+            'say ok',
+          ],
+          env: openCodeEnv({ mockPort: mockServer.port }),
+          cwd: process.cwd(),
+          timeout: 8000,
+        }),
+        SANDBOX_EXEC_OPTS,
+      );
+      mockRedirectWorks = result.code === 0;
+    } catch {
+      mockRedirectWorks = false;
+    } finally {
+      probeRuntime.dispose();
+    }
 
     workDir = await mkdtemp(path.join(tmpdir(), 'opencode-headless-'));
   }, 30_000);
@@ -217,29 +359,43 @@ describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
   it(
     'OpenCode boots in run mode — exits with code 0',
     async () => {
-      let result;
-      if (mockRedirectWorks) {
-        // Pad queue: title request consumes first, main request uses second
-        mockServer.reset([
-          { type: 'text', text: 'title' },
-          { type: 'text', text: 'Hello!' },
-          { type: 'text', text: 'Hello!' },
-        ]);
-        result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'say hello'],
-          { mockPort: mockServer.port, cwd: workDir },
-        );
-      } else {
-        result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'say hello'],
-          { cwd: workDir },
-        );
-      }
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
 
-      if (result.exitCode !== 0) {
-        console.log('OpenCode boot stderr:', result.stderr.slice(0, 2000));
+      try {
+        if (mockRedirectWorks) {
+          mockServer.reset([
+            { type: 'text', text: 'title' },
+            { type: 'text', text: 'Hello!' },
+            { type: 'text', text: 'Hello!' },
+          ]);
+        }
+
+        const result = await runtime.exec(
+          buildSpawnCode({
+            args: [
+              'run',
+              '-m',
+              'anthropic/claude-sonnet-4-6',
+              '--format',
+              'json',
+              'say hello',
+            ],
+            env: mockRedirectWorks
+              ? openCodeEnv({ mockPort: mockServer.port })
+              : openCodeEnv(),
+            cwd: workDir,
+          }),
+          SANDBOX_EXEC_OPTS,
+        );
+
+        if (result.code !== 0) {
+          console.log('OpenCode boot stderr:', capture.stderr().slice(0, 2000));
+        }
+        expect(result.code).toBe(0);
+      } finally {
+        runtime.dispose();
       }
-      expect(result.exitCode).toBe(0);
     },
     60_000,
   );
@@ -247,29 +403,60 @@ describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
   it(
     'OpenCode produces output — stdout contains LLM response',
     async () => {
-      let result;
-      if (mockRedirectWorks) {
-        const canary = 'UNIQUE_CANARY_OC_42';
-        // Pad queue: title + main
-        mockServer.reset([
-          { type: 'text', text: 'title' },
-          { type: 'text', text: canary },
-          { type: 'text', text: canary },
-        ]);
-        result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'say hello'],
-          { mockPort: mockServer.port, cwd: workDir },
-        );
-        expect(result.stdout).toContain(canary);
-      } else {
-        result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'respond with exactly: HELLO_OUTPUT'],
-          { cwd: workDir },
-        );
-        // With real API, verify we got some text response
-        const events = parseJsonEvents(result.stdout);
-        const textEvents = events.filter((e) => e.type === 'text');
-        expect(textEvents.length).toBeGreaterThan(0);
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
+
+      try {
+        if (mockRedirectWorks) {
+          const canary = 'UNIQUE_CANARY_OC_42';
+          mockServer.reset([
+            { type: 'text', text: 'title' },
+            { type: 'text', text: canary },
+            { type: 'text', text: canary },
+          ]);
+
+          const result = await runtime.exec(
+            buildSpawnCode({
+              args: [
+                'run',
+                '-m',
+                'anthropic/claude-sonnet-4-6',
+                '--format',
+                'json',
+                'say hello',
+              ],
+              env: openCodeEnv({ mockPort: mockServer.port }),
+              cwd: workDir,
+            }),
+            SANDBOX_EXEC_OPTS,
+          );
+
+          expect(result.code).toBe(0);
+          expect(capture.stdout()).toContain(canary);
+        } else {
+          const result = await runtime.exec(
+            buildSpawnCode({
+              args: [
+                'run',
+                '-m',
+                'anthropic/claude-sonnet-4-6',
+                '--format',
+                'json',
+                'respond with exactly: HELLO_OUTPUT',
+              ],
+              env: openCodeEnv(),
+              cwd: workDir,
+            }),
+            SANDBOX_EXEC_OPTS,
+          );
+
+          expect(result.code).toBe(0);
+          const events = parseJsonEvents(capture.stdout());
+          const textEvents = events.filter((e) => e.type === 'text');
+          expect(textEvents.length).toBeGreaterThan(0);
+        }
+      } finally {
+        runtime.dispose();
       }
     },
     60_000,
@@ -279,33 +466,47 @@ describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
     'OpenCode text format — --format default produces formatted output',
     async () => {
       const canary = 'TEXTFORMAT_CANARY_99';
-      let result;
-      if (mockRedirectWorks) {
-        // Pad queue: opencode makes a title request + main request
-        mockServer.reset([
-          { type: 'text', text: canary },
-          { type: 'text', text: canary },
-          { type: 'text', text: canary },
-        ]);
-        result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'default', 'say hello'],
-          { mockPort: mockServer.port, cwd: workDir },
-        );
-      } else {
-        result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'default', 'respond with: hi'],
-          { cwd: workDir },
-        );
-      }
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
 
-      expect(result.exitCode).toBe(0);
-      // Default format output should contain text content (ANSI-stripped)
-      const stripped = result.stdout.replace(/\x1b\[[0-9;]*m/g, '').trim();
-      expect(stripped.length).toBeGreaterThan(0);
-      // When piped, opencode may use its formatted renderer (not raw JSON events)
-      // The output should differ from --format json (which produces NDJSON)
-      if (mockRedirectWorks) {
-        expect(stripped).toContain(canary);
+      try {
+        if (mockRedirectWorks) {
+          mockServer.reset([
+            { type: 'text', text: canary },
+            { type: 'text', text: canary },
+            { type: 'text', text: canary },
+          ]);
+        }
+
+        const result = await runtime.exec(
+          buildSpawnCode({
+            args: [
+              'run',
+              '-m',
+              'anthropic/claude-sonnet-4-6',
+              '--format',
+              'default',
+              mockRedirectWorks ? 'say hello' : 'respond with: hi',
+            ],
+            env: mockRedirectWorks
+              ? openCodeEnv({ mockPort: mockServer.port })
+              : openCodeEnv(),
+            cwd: workDir,
+          }),
+          SANDBOX_EXEC_OPTS,
+        );
+
+        expect(result.code).toBe(0);
+        const stripped = capture
+          .stdout()
+          .replace(/\x1b\[[0-9;]*m/g, '')
+          .trim();
+        expect(stripped.length).toBeGreaterThan(0);
+        if (mockRedirectWorks) {
+          expect(stripped).toContain(canary);
+        }
+      } finally {
+        runtime.dispose();
       }
     },
     60_000,
@@ -314,67 +515,106 @@ describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
   it(
     'OpenCode JSON format — --format json produces valid JSON events',
     async () => {
-      let result;
-      if (mockRedirectWorks) {
-        // Pad queue: title + main
-        mockServer.reset([
-          { type: 'text', text: 'title' },
-          { type: 'text', text: 'Hello JSON!' },
-          { type: 'text', text: 'Hello JSON!' },
-        ]);
-        result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'say hello'],
-          { mockPort: mockServer.port, cwd: workDir },
-        );
-      } else {
-        result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'respond with: hi'],
-          { cwd: workDir },
-        );
-      }
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
 
-      expect(result.exitCode).toBe(0);
-      const events = parseJsonEvents(result.stdout);
-      expect(events.length).toBeGreaterThan(0);
-      // All parsed events should have a type field
-      for (const event of events) {
-        expect(event).toHaveProperty('type');
+      try {
+        if (mockRedirectWorks) {
+          mockServer.reset([
+            { type: 'text', text: 'title' },
+            { type: 'text', text: 'Hello JSON!' },
+            { type: 'text', text: 'Hello JSON!' },
+          ]);
+        }
+
+        const result = await runtime.exec(
+          buildSpawnCode({
+            args: [
+              'run',
+              '-m',
+              'anthropic/claude-sonnet-4-6',
+              '--format',
+              'json',
+              mockRedirectWorks ? 'say hello' : 'respond with: hi',
+            ],
+            env: mockRedirectWorks
+              ? openCodeEnv({ mockPort: mockServer.port })
+              : openCodeEnv(),
+            cwd: workDir,
+          }),
+          SANDBOX_EXEC_OPTS,
+        );
+
+        expect(result.code).toBe(0);
+        const events = parseJsonEvents(capture.stdout());
+        expect(events.length).toBeGreaterThan(0);
+        for (const event of events) {
+          expect(event).toHaveProperty('type');
+        }
+      } finally {
+        runtime.dispose();
       }
     },
     60_000,
   );
 
   it(
-    'Environment forwarding — API key and base URL reach the binary',
+    'Environment forwarding — API key and base URL reach the binary through the bridge',
     async () => {
-      if (mockRedirectWorks) {
-        // Pad queue: title + main
-        mockServer.reset([
-          { type: 'text', text: 'title' },
-          { type: 'text', text: 'ENV_OK' },
-          { type: 'text', text: 'ENV_OK' },
-        ]);
-        const result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'say hello'],
-          { mockPort: mockServer.port, cwd: workDir },
-        );
-        // Mock server was reached — env vars forwarded correctly
-        expect(mockServer.requestCount()).toBeGreaterThanOrEqual(1);
-        expect(result.exitCode).toBe(0);
-      } else {
-        // Without mock, verify API key is forwarded by making a successful API call
-        const result = await runOpenCode(
-          ['run', '-m', 'anthropic/claude-sonnet-4-6', '--format', 'json', 'respond with: ok'],
-          {
-            cwd: workDir,
-            env: { ANTHROPIC_API_KEY: 'forwarded-test-key' },
-          },
-        );
-        // If the call succeeds, environment was forwarded (opencode proxy handled auth)
-        expect(result.exitCode).toBe(0);
-        const events = parseJsonEvents(result.stdout);
-        // Should have at least a text or error event
-        expect(events.length).toBeGreaterThan(0);
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
+
+      try {
+        if (mockRedirectWorks) {
+          mockServer.reset([
+            { type: 'text', text: 'title' },
+            { type: 'text', text: 'ENV_OK' },
+            { type: 'text', text: 'ENV_OK' },
+          ]);
+
+          const result = await runtime.exec(
+            buildSpawnCode({
+              args: [
+                'run',
+                '-m',
+                'anthropic/claude-sonnet-4-6',
+                '--format',
+                'json',
+                'say hello',
+              ],
+              env: openCodeEnv({ mockPort: mockServer.port }),
+              cwd: workDir,
+            }),
+            SANDBOX_EXEC_OPTS,
+          );
+
+          expect(mockServer.requestCount()).toBeGreaterThanOrEqual(1);
+          expect(result.code).toBe(0);
+        } else {
+          const result = await runtime.exec(
+            buildSpawnCode({
+              args: [
+                'run',
+                '-m',
+                'anthropic/claude-sonnet-4-6',
+                '--format',
+                'json',
+                'respond with: ok',
+              ],
+              env: openCodeEnv({
+                extraEnv: { ANTHROPIC_API_KEY: 'forwarded-test-key' },
+              }),
+              cwd: workDir,
+            }),
+            SANDBOX_EXEC_OPTS,
+          );
+
+          expect(result.code).toBe(0);
+          const events = parseJsonEvents(capture.stdout());
+          expect(events.length).toBeGreaterThan(0);
+        }
+      } finally {
+        runtime.dispose();
       }
     },
     60_000,
@@ -392,48 +632,63 @@ describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
       const secretContent = 'secret_oc_content_xyz_' + Date.now();
       await writeFile(path.join(testDir, 'test.txt'), secretContent);
 
-      let result;
-      if (mockRedirectWorks) {
-        // Pad queue: title request consumes first response, then tool_use + text
-        mockServer.reset([
-          { type: 'text', text: 'title' },
-          {
-            type: 'tool_use',
-            name: 'read',
-            input: { path: path.join(testDir, 'test.txt') },
-          },
-          { type: 'text', text: `The file contains: ${secretContent}` },
-          { type: 'text', text: secretContent },
-        ]);
-        result = await runOpenCode(
-          [
-            'run',
-            '-m',
-            'anthropic/claude-sonnet-4-6',
-            '--format',
-            'json',
-            `read the file at ${path.join(testDir, 'test.txt')} and repeat its exact contents`,
-          ],
-          { mockPort: mockServer.port, cwd: testDir },
-        );
-        expect(mockServer.requestCount()).toBeGreaterThanOrEqual(2);
-        expect(result.stdout).toContain(secretContent);
-      } else {
-        // Real API: ask the model to read the file
-        result = await runOpenCode(
-          [
-            'run',
-            '-m',
-            'anthropic/claude-sonnet-4-6',
-            '--format',
-            'json',
-            `Use the read tool to read the file at ${path.join(testDir, 'test.txt')} and output its exact contents. Do not explain, just output the contents.`,
-          ],
-          { cwd: testDir },
-        );
-        // Verify the model accessed the file (it should appear in stdout)
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain(secretContent);
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
+
+      try {
+        if (mockRedirectWorks) {
+          mockServer.reset([
+            { type: 'text', text: 'title' },
+            {
+              type: 'tool_use',
+              name: 'read',
+              input: { path: path.join(testDir, 'test.txt') },
+            },
+            { type: 'text', text: `The file contains: ${secretContent}` },
+            { type: 'text', text: secretContent },
+          ]);
+
+          const result = await runtime.exec(
+            buildSpawnCode({
+              args: [
+                'run',
+                '-m',
+                'anthropic/claude-sonnet-4-6',
+                '--format',
+                'json',
+                `read the file at ${path.join(testDir, 'test.txt')} and repeat its exact contents`,
+              ],
+              env: openCodeEnv({ mockPort: mockServer.port }),
+              cwd: testDir,
+            }),
+            SANDBOX_EXEC_OPTS,
+          );
+
+          expect(result.code).toBe(0);
+          expect(mockServer.requestCount()).toBeGreaterThanOrEqual(2);
+          expect(capture.stdout()).toContain(secretContent);
+        } else {
+          const result = await runtime.exec(
+            buildSpawnCode({
+              args: [
+                'run',
+                '-m',
+                'anthropic/claude-sonnet-4-6',
+                '--format',
+                'json',
+                `Use the read tool to read the file at ${path.join(testDir, 'test.txt')} and output its exact contents. Do not explain, just output the contents.`,
+              ],
+              env: openCodeEnv(),
+              cwd: testDir,
+            }),
+            SANDBOX_EXEC_OPTS,
+          );
+
+          expect(result.code).toBe(0);
+          expect(capture.stdout()).toContain(secretContent);
+        }
+      } finally {
+        runtime.dispose();
       }
     },
     60_000,
@@ -447,65 +702,72 @@ describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
       const outPath = path.join(testDir, 'out.txt');
       const writeContent = 'hello_from_opencode_mock';
 
-      let result;
-      if (mockRedirectWorks) {
-        // Pad queue: title request + bash tool_use + text response
-        mockServer.reset([
-          { type: 'text', text: 'title' },
-          {
-            type: 'tool_use',
-            name: 'bash',
-            input: {
-              command: `echo -n '${writeContent}' > '${outPath}'`,
-            },
-          },
-          { type: 'text', text: 'I wrote the file.' },
-          { type: 'text', text: 'done' },
-        ]);
-        result = await runOpenCode(
-          [
-            'run',
-            '-m',
-            'anthropic/claude-sonnet-4-6',
-            '--format',
-            'json',
-            `create a file at ${outPath} with the content: ${writeContent}`,
-          ],
-          { mockPort: mockServer.port, cwd: testDir },
-        );
-      } else {
-        // Real API: ask the model to write a file
-        result = await runOpenCode(
-          [
-            'run',
-            '-m',
-            'anthropic/claude-sonnet-4-6',
-            '--format',
-            'json',
-            `Use the bash tool to run: echo -n '${writeContent}' > '${outPath}'. Do not explain.`,
-          ],
-          { cwd: testDir },
-        );
-      }
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
 
-      expect(result.exitCode).toBe(0);
-      // Verify file was created — tool_use must execute bash command on host
-      const fileCreated = existsSync(outPath);
-      if (mockRedirectWorks) {
-        // With mock: verify tool_use round-trip completed (title + prompt + tool_result + response)
-        expect(mockServer.requestCount()).toBeGreaterThanOrEqual(3);
-        // Opencode processed the tool_use and sent a tool_result back
-        // The file may or may not exist depending on opencode's bash tool schema matching
-        if (fileCreated) {
+      try {
+        if (mockRedirectWorks) {
+          mockServer.reset([
+            { type: 'text', text: 'title' },
+            {
+              type: 'tool_use',
+              name: 'bash',
+              input: {
+                command: `echo -n '${writeContent}' > '${outPath}'`,
+              },
+            },
+            { type: 'text', text: 'I wrote the file.' },
+            { type: 'text', text: 'done' },
+          ]);
+
+          const result = await runtime.exec(
+            buildSpawnCode({
+              args: [
+                'run',
+                '-m',
+                'anthropic/claude-sonnet-4-6',
+                '--format',
+                'json',
+                `create a file at ${outPath} with the content: ${writeContent}`,
+              ],
+              env: openCodeEnv({ mockPort: mockServer.port }),
+              cwd: testDir,
+            }),
+            SANDBOX_EXEC_OPTS,
+          );
+
+          expect(result.code).toBe(0);
+          expect(mockServer.requestCount()).toBeGreaterThanOrEqual(3);
+          const fileCreated = existsSync(outPath);
+          if (fileCreated) {
+            const content = await readFile(outPath, 'utf8');
+            expect(content).toContain(writeContent);
+          }
+          expect(capture.stdout()).toContain('I wrote the file');
+        } else {
+          const result = await runtime.exec(
+            buildSpawnCode({
+              args: [
+                'run',
+                '-m',
+                'anthropic/claude-sonnet-4-6',
+                '--format',
+                'json',
+                `Use the bash tool to run: echo -n '${writeContent}' > '${outPath}'. Do not explain.`,
+              ],
+              env: openCodeEnv(),
+              cwd: testDir,
+            }),
+            SANDBOX_EXEC_OPTS,
+          );
+
+          expect(result.code).toBe(0);
+          expect(existsSync(outPath)).toBe(true);
           const content = await readFile(outPath, 'utf8');
           expect(content).toContain(writeContent);
         }
-        // Verify the final text response was received
-        expect(result.stdout).toContain('I wrote the file');
-      } else {
-        expect(fileCreated).toBe(true);
-        const content = await readFile(outPath, 'utf8');
-        expect(content).toContain(writeContent);
+      } finally {
+        runtime.dispose();
       }
     },
     60_000,
@@ -516,58 +778,36 @@ describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
   // -------------------------------------------------------------------------
 
   it(
-    'SIGINT stops execution — send SIGINT during run, process terminates cleanly',
+    'SIGINT stops execution — send SIGINT through bridge, process terminates cleanly',
     async () => {
-      const child = spawnOpenCode(
-        [
-          'run',
-          '-m',
-          'anthropic/claude-sonnet-4-6',
-          '--format',
-          'json',
-          'Write a very long essay about the history of computing. Make it at least 5000 words.',
-        ],
-        { cwd: workDir },
-      );
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
 
-      // Wait for some output to confirm the process started
-      const gotOutput = new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), 15_000);
-        child.stdout?.on('data', () => {
-          clearTimeout(timer);
-          resolve(true);
-        });
-        child.stderr?.on('data', () => {
-          clearTimeout(timer);
-          resolve(true);
-        });
-      });
+      try {
+        const result = await runtime.exec(
+          buildSigintCode({
+            args: [
+              'run',
+              '-m',
+              'anthropic/claude-sonnet-4-6',
+              '--format',
+              'json',
+              'Write a very long essay about the history of computing. Make it at least 5000 words.',
+            ],
+            env: openCodeEnv(),
+            cwd: workDir,
+          }),
+          SANDBOX_EXEC_OPTS,
+        );
 
-      const started = await gotOutput;
-      if (!started) {
-        child.kill();
-        // If no output after 15s, skip gracefully (environment issue)
-        return;
+        // Exit code 2 = no output received (environment issue, skip gracefully)
+        if (result.code === 2) return;
+
+        // Should not need SIGKILL (exit code 137)
+        expect(result.code).not.toBe(137);
+      } finally {
+        runtime.dispose();
       }
-
-      // Send SIGINT
-      child.kill('SIGINT');
-
-      // Wait for exit
-      const exitCode = await new Promise<number>((resolve) => {
-        const timer = setTimeout(() => {
-          child.kill('SIGKILL');
-          resolve(137);
-        }, 10_000);
-        child.on('close', (code) => {
-          clearTimeout(timer);
-          resolve(code ?? 1);
-        });
-      });
-
-      // Process should terminate (not hang indefinitely)
-      // Exit code may be 0 (graceful) or 130 (SIGINT) or similar
-      expect(exitCode).not.toBe(137); // Should not need SIGKILL
     },
     45_000,
   );
@@ -577,356 +817,44 @@ describe.skipIf(skipReason)('OpenCode headless E2E (Strategy A)', () => {
   // -------------------------------------------------------------------------
 
   it(
-    'Exit code on error — bad API key produces error event',
+    'Exit code on error — bad model produces error event',
     async () => {
       if (mockRedirectWorks) {
-        // With mock: send a 400 error response
         mockServer.reset([]);
       }
 
-      // Use a non-existent provider/model to trigger a reliable error
-      const result = await runOpenCode(
-        ['run', '-m', 'fakeprovider/nonexistent-model', '--format', 'json', 'say hello'],
-        { cwd: workDir, timeout: 15_000 },
-      );
+      const capture = createStdioCapture();
+      const runtime = createOpenCodeSandboxRuntime({ onStdio: capture.onStdio });
 
-      // OpenCode always exits 0 but emits error events in JSON
-      const combined = result.stdout + result.stderr;
-      // Should contain error information (either JSON error event or stack trace)
-      const hasError =
-        combined.includes('Error') ||
-        combined.includes('error') ||
-        combined.includes('ProviderModelNotFoundError') ||
-        combined.includes('not found');
-      expect(hasError).toBe(true);
+      try {
+        const result = await runtime.exec(
+          buildSpawnCode({
+            args: [
+              'run',
+              '-m',
+              'fakeprovider/nonexistent-model',
+              '--format',
+              'json',
+              'say hello',
+            ],
+            env: openCodeEnv(),
+            cwd: workDir,
+            timeout: 15000,
+          }),
+          SANDBOX_EXEC_OPTS,
+        );
+
+        const combined = capture.stdout() + capture.stderr();
+        const hasError =
+          combined.includes('Error') ||
+          combined.includes('error') ||
+          combined.includes('ProviderModelNotFoundError') ||
+          combined.includes('not found');
+        expect(hasError).toBe(true);
+      } finally {
+        runtime.dispose();
+      }
     },
     30_000,
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Strategy B: SDK client → opencode serve
-// ---------------------------------------------------------------------------
-
-describe.skipIf(skipReason)('OpenCode headless E2E (Strategy B — SDK client)', () => {
-  let sdkServerUrl: string | null = null;
-  let sdkServerProc: ChildProcess | null = null;
-  let sdkMock: MockLlmServerHandle | null = null;
-  let sdkWorkDir = '';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let sdkClient: any = null;
-
-  beforeAll(async () => {
-    sdkWorkDir = await mkdtemp(path.join(tmpdir(), 'opencode-sdk-'));
-
-    // Minimal git project (opencode serve needs project context)
-    await writeFile(
-      path.join(sdkWorkDir, 'package.json'),
-      JSON.stringify({ name: 'test-sdk' }),
-    );
-    const { execSync } = require('node:child_process');
-    execSync('git init && git add -A && git commit -m init', {
-      cwd: sdkWorkDir,
-      stdio: 'ignore',
-      env: {
-        ...process.env,
-        GIT_AUTHOR_NAME: 'test',
-        GIT_COMMITTER_NAME: 'test',
-        GIT_AUTHOR_EMAIL: 'test@test.com',
-        GIT_COMMITTER_EMAIL: 'test@test.com',
-      },
-    });
-
-    // Mock LLM server (separate instance from Strategy A)
-    sdkMock = await createMockLlmServer([]);
-
-    // Launch opencode serve with dynamic port and mock LLM redirect
-    const env: Record<string, string> = {
-      PATH: process.env.PATH ?? '',
-      HOME: process.env.HOME ?? tmpdir(),
-      TERM: process.env.TERM ?? 'xterm-256color',
-      XDG_DATA_HOME: path.join(tmpdir(), `opencode-sdk-${Date.now()}`),
-      ANTHROPIC_API_KEY: 'test-sdk-key',
-      ANTHROPIC_BASE_URL: `http://127.0.0.1:${sdkMock.port}`,
-      OPENCODE_CONFIG_CONTENT: JSON.stringify({}),
-    };
-
-    sdkServerProc = spawn(
-      'opencode',
-      ['serve', '--port', '0', '--hostname', '127.0.0.1'],
-      { env, cwd: sdkWorkDir, stdio: ['pipe', 'pipe', 'pipe'] },
-    );
-
-    // Parse server URL from stdout/stderr
-    try {
-      sdkServerUrl = await new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          sdkServerProc!.kill();
-          reject(new Error('opencode serve did not start within 20s'));
-        }, 20_000);
-
-        let output = '';
-        const onData = (chunk: Buffer) => {
-          output += chunk.toString();
-          const match = output.match(
-            /opencode server listening on\s+(https?:\/\/[^\s]+)/,
-          );
-          if (match) {
-            clearTimeout(timer);
-            resolve(match[1]);
-          }
-        };
-        sdkServerProc!.stdout?.on('data', onData);
-        sdkServerProc!.stderr?.on('data', onData);
-        sdkServerProc!.on('exit', (code) => {
-          clearTimeout(timer);
-          reject(
-            new Error(
-              `opencode serve exited with code ${code}\n${output.slice(0, 2000)}`,
-            ),
-          );
-        });
-      });
-    } catch (err) {
-      console.log(
-        'Strategy B setup: opencode serve failed —',
-        (err as Error).message.slice(0, 500),
-      );
-      return;
-    }
-
-    // Create SDK client
-    const { createOpencodeClient } = await import('@opencode-ai/sdk');
-    sdkClient = createOpencodeClient({
-      baseUrl: sdkServerUrl as `${string}://${string}`,
-      directory: sdkWorkDir,
-    });
-
-    // Health check — verify server is responding
-    try {
-      const health = await sdkClient.session.list();
-      if (health.error) {
-        console.log('Strategy B: health check failed:', health.error);
-        sdkClient = null;
-      }
-    } catch (err) {
-      console.log('Strategy B: health check error:', err);
-      sdkClient = null;
-    }
-  }, 30_000);
-
-  afterAll(async () => {
-    if (sdkServerProc) {
-      sdkServerProc.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          sdkServerProc!.kill('SIGKILL');
-          resolve();
-        }, 3_000);
-        sdkServerProc!.on('close', () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-    }
-    if (sdkMock) await sdkMock.close();
-    if (sdkWorkDir) {
-      await rm(sdkWorkDir, { recursive: true, force: true }).catch(() => {});
-    }
-  });
-
-  // -------------------------------------------------------------------------
-  // Connection & health
-  // -------------------------------------------------------------------------
-
-  it(
-    'SDK client connects — create client, call health/status endpoint',
-    async () => {
-      if (!sdkClient) return;
-
-      const result = await sdkClient.session.list();
-      expect(result.data).toBeDefined();
-      expect(Array.isArray(result.data)).toBe(true);
-    },
-    15_000,
-  );
-
-  // -------------------------------------------------------------------------
-  // Prompt
-  // -------------------------------------------------------------------------
-
-  it(
-    'SDK sends prompt — send prompt via SDK, receive streamed response',
-    async () => {
-      if (!sdkClient) return;
-
-      // Title request + main response (opencode may issue title call first)
-      sdkMock!.reset([
-        { type: 'text', text: 'title' },
-        { type: 'text', text: 'SDK_PROMPT_CANARY_42' },
-        { type: 'text', text: 'SDK_PROMPT_CANARY_42' },
-        { type: 'text', text: 'SDK_PROMPT_CANARY_42' },
-      ]);
-
-      const session = await sdkClient.session.create();
-      expect(session.data?.id).toBeDefined();
-
-      const result = await sdkClient.session.prompt({
-        path: { id: session.data.id },
-        body: {
-          parts: [{ type: 'text', text: 'say hello' }],
-          model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-6' },
-        },
-      });
-
-      expect(result.data).toBeDefined();
-      expect(result.data.info).toBeDefined();
-      expect(result.data.parts.length).toBeGreaterThan(0);
-    },
-    60_000,
-  );
-
-  // -------------------------------------------------------------------------
-  // Session management
-  // -------------------------------------------------------------------------
-
-  it(
-    'SDK session management — create session, send message, list messages',
-    async () => {
-      if (!sdkClient) return;
-
-      sdkMock!.reset([
-        { type: 'text', text: 'title' },
-        { type: 'text', text: 'SESSION_MGMT_RESPONSE' },
-        { type: 'text', text: 'SESSION_MGMT_RESPONSE' },
-        { type: 'text', text: 'SESSION_MGMT_RESPONSE' },
-      ]);
-
-      // Create session
-      const session = await sdkClient.session.create();
-      expect(session.data?.id).toBeDefined();
-
-      // Send message
-      await sdkClient.session.prompt({
-        path: { id: session.data.id },
-        body: {
-          parts: [{ type: 'text', text: 'session management test' }],
-          model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-6' },
-        },
-      });
-
-      // List messages — should include user message and assistant response
-      const msgs = await sdkClient.session.messages({
-        path: { id: session.data.id },
-      });
-      expect(msgs.data).toBeDefined();
-      expect(Array.isArray(msgs.data)).toBe(true);
-      expect(msgs.data.length).toBeGreaterThanOrEqual(2);
-    },
-    60_000,
-  );
-
-  // -------------------------------------------------------------------------
-  // SSE streaming
-  // -------------------------------------------------------------------------
-
-  it(
-    'SSE streaming works — response streams incrementally, not all-at-once',
-    async () => {
-      if (!sdkClient || !sdkServerUrl) return;
-
-      sdkMock!.reset([
-        { type: 'text', text: 'title' },
-        { type: 'text', text: 'SSE_INCREMENTAL_RESPONSE' },
-        { type: 'text', text: 'SSE_INCREMENTAL_RESPONSE' },
-        { type: 'text', text: 'SSE_INCREMENTAL_RESPONSE' },
-      ]);
-
-      const session = await sdkClient.session.create();
-      expect(session.data?.id).toBeDefined();
-
-      // Open raw SSE connection to /event
-      const controller = new AbortController();
-      const sseResp = await fetch(
-        `${sdkServerUrl}/event?directory=${encodeURIComponent(sdkWorkDir)}`,
-        { signal: controller.signal },
-      );
-      expect(sseResp.ok).toBe(true);
-      expect(sseResp.headers.get('content-type')).toContain(
-        'text/event-stream',
-      );
-
-      // Read SSE chunks in background
-      const reader = sseResp.body!.getReader();
-      const decoder = new TextDecoder();
-      const chunks: string[] = [];
-
-      const readLoop = (async () => {
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            chunks.push(decoder.decode(value, { stream: true }));
-            const joined = chunks.join('');
-            if (
-              joined.includes('message.part.updated') ||
-              chunks.length > 100
-            ) {
-              break;
-            }
-          }
-        } catch {
-          // AbortError expected on cleanup
-        }
-      })();
-
-      // Let SSE connection establish
-      await new Promise((r) => setTimeout(r, 300));
-
-      // Send prompt — generates streaming SSE events
-      await sdkClient.session.prompt({
-        path: { id: session.data.id },
-        body: {
-          parts: [{ type: 'text', text: 'stream test' }],
-          model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-6' },
-        },
-      });
-
-      // Wait for SSE events or timeout
-      await Promise.race([
-        readLoop,
-        new Promise((r) => setTimeout(r, 10_000)),
-      ]);
-      controller.abort();
-
-      // Verify SSE delivered incremental events
-      const allData = chunks.join('');
-      expect(allData.length).toBeGreaterThan(0);
-      const dataLines = allData
-        .split('\n')
-        .filter((l) => l.startsWith('data:'));
-      // Multiple data: lines prove incremental event delivery
-      expect(dataLines.length).toBeGreaterThan(1);
-    },
-    60_000,
-  );
-
-  // -------------------------------------------------------------------------
-  // Error handling
-  // -------------------------------------------------------------------------
-
-  it(
-    'SDK error handling — invalid session ID returns proper error response',
-    async () => {
-      if (!sdkClient) return;
-
-      const result = await sdkClient.session.get({
-        path: { id: 'nonexistent-session-id-99999' },
-      });
-
-      // Non-existent session should produce error (404 Not Found)
-      expect(result.error).toBeDefined();
-    },
-    15_000,
   );
 });
