@@ -2762,3 +2762,15 @@ PRD: ralph/kernel-hardening (46 stories)
   - Buffer round-trip through BYTEA works via parameterized queries ($1) — pg handles Buffer serialization to bytea wire format in user-space JS
   - No additional bridge fixes needed for type parsing — all type coercion happens in pg's JS type parser code
 ---
+
+## 2026-03-19 - US-024
+- Added pg-errors e2e-docker fixture for error path coverage
+- Tests 4 error scenarios: syntax error (bad SQL), undefined table, unique constraint violation, connection refused (wrong port)
+- SQL errors serialize message/code/severity/constraint from pg protocol; connection error serializes message only
+- Files changed: packages/secure-exec/tests/e2e-docker/pg-errors/{package.json,fixture.json,src/index.js}
+- **Learnings for future iterations:**
+  - pg SQL errors (syntax, undefined table, unique violation) propagate all protocol fields (message, code, severity, constraint) identically through the sandbox — these come from the Postgres server, not the socket layer
+  - Connection refused errors only serialize message (not code/errno) per codebase pattern — net bridge _onError only propagates err.message
+  - Each error test uses its own Client instance to avoid connection state contamination after errors
+  - Unique constraint test uses DELETE before INSERT to ensure clean state, and PRIMARY KEY as the constraint
+---
