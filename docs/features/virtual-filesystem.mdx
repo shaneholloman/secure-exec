@@ -167,9 +167,29 @@ const result = await runtime.exec(`
   console.log(config.greeting);
 `);
 
-console.log(result.stdout); // "hello\n"
+// Output captured via onStdio callback — see Output Capture docs
 runtime.dispose();
 ```
+
+## More examples
+
+Full, tested implementations for common storage backends:
+
+<CardGroup cols={2}>
+  <Card title="S3 / MinIO" icon="cloud" href="https://github.com/rivet-dev/secure-exec/tree/main/examples/virtual-file-system-s3">
+    Store sandbox files as S3 objects. Works with any S3-compatible store (AWS, MinIO, R2). Includes Docker Compose for local testing with MinIO.
+  </Card>
+  <Card title="SQLite" icon="database" href="https://github.com/rivet-dev/secure-exec/tree/main/examples/virtual-file-system-sqlite">
+    Store sandbox files as rows in a SQLite database (via sql.js / WASM). Snapshot and restore entire filesystems. No external services needed.
+  </Card>
+</CardGroup>
+
+Other use cases you can build with `VirtualFileSystem`:
+
+- **Git-backed storage** — store files in a bare Git repo, with each sandbox session as a commit
+- **Encrypted filesystem** — wrap another VFS and encrypt/decrypt content transparently
+- **Union / overlay filesystem** — layer a writable VFS on top of a read-only base (e.g. template files + user modifications)
+- **Remote filesystem** — proxy file operations to a remote server via HTTP or gRPC
 
 ## Tips
 

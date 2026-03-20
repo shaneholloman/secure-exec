@@ -229,7 +229,7 @@
     },
     {
       "id": "US-013",
-      "title": "Create S3 VFS driver example with MinIO test setup",
+      "title": "Create S3 filesystem driver example with MinIO test setup",
       "description": "As a developer, I need an example showing how to implement a VirtualFileSystem backed by S3 so I can store sandbox files in object storage.",
       "acceptanceCriteria": [
         "S3FileSystem class implements full VirtualFileSystem interface",
@@ -242,11 +242,11 @@
       ],
       "priority": 13,
       "passes": true,
-      "notes": "Completed. Example at examples/vfs-s3/. Uses @aws-sdk/client-s3. Tested e2e against MinIO Docker container. Symlinks/hard links throw ENOSYS; chmod/chown/utimes are no-ops."
+      "notes": "Completed. Example at examples/virtual-file-system-s3/. Uses @aws-sdk/client-s3. Tested e2e against MinIO Docker container. Symlinks/hard links throw ENOSYS; chmod/chown/utimes are no-ops."
     },
     {
       "id": "US-014",
-      "title": "Create SQLite VFS driver example with sql.js",
+      "title": "Create SQLite filesystem driver example with sql.js",
       "description": "As a developer, I need an example showing how to implement a VirtualFileSystem backed by SQLite so I can store sandbox files in a database.",
       "acceptanceCriteria": [
         "SQLiteFileSystem class implements full VirtualFileSystem interface",
@@ -260,12 +260,12 @@
       ],
       "priority": 14,
       "passes": true,
-      "notes": "Completed. Example at examples/vfs-sqlite/. Uses sql.js (WASM SQLite). All entries stored in single 'entries' table. Tested e2e — no external services needed."
+      "notes": "Completed. Example at examples/virtual-file-system-sqlite/. Uses sql.js (WASM SQLite). All entries stored in single 'entries' table. Tested e2e — no external services needed."
     },
     {
       "id": "US-015",
-      "title": "Link VFS examples in docs and describe use cases",
-      "description": "As a developer, I need the VFS examples linked in the custom virtual filesystem docs page with descriptions of use cases so I can discover them.",
+      "title": "Link filesystem driver examples in docs and describe use cases",
+      "description": "As a developer, I need the filesystem driver examples linked in the custom virtual filesystem docs page with descriptions of use cases so I can discover them.",
       "acceptanceCriteria": [
         "docs/features/virtual-filesystem.mdx links to both S3 and SQLite examples",
         "Use case descriptions for each example",

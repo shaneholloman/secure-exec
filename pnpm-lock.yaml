@@ -229,7 +229,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  examples/vfs-s3:
+  examples/virtual-file-system-s3:
     dependencies:
       '@aws-sdk/client-s3':
         specifier: ^3.700.0
@@ -245,7 +245,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  examples/vfs-sqlite:
+  examples/virtual-file-system-sqlite:
     dependencies:
       secure-exec:
         specifier: workspace:*
