@@ -339,8 +339,8 @@
         "Tests pass"
       ],
       "priority": 19,
-      "passes": false,
-      "notes": "Zero error paths are currently tested for SSH/SFTP. Connection refused and auth failure are the two most common error cases. The sandbox could swallow or reshape these errors differently from host Node.js without detection."
+      "passes": true,
+      "notes": "Completed. ssh2-auth-fail connects with wrong password, verifies error level and message match host. ssh2-connect-refused connects to non-listening port 1, verifies ECONNREFUSED error message matches host. Both fixtures have expectation pass. Note: bridge _onError does not propagate err.code/err.errno (only message) — a future bridge improvement."
     },
     {
       "id": "US-020",

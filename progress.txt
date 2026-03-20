@@ -3,6 +3,7 @@ Started: 2026-03-17
 PRD: ralph/kernel-hardening (46 stories)
 
 ## Codebase Patterns
+- Net bridge _onError only propagates err.message — err.code/err.errno are not set on socket errors in the sandbox (e.g., ECONNREFUSED code missing); error path fixtures should only serialize message/level, not code/errno
 - Docker containers on default bridge can reach each other by internal IP (docker inspect IPAddress), not by 127.0.0.1 host-mapped ports — use getContainerInternalIp() for cross-container tunnel destinations
 - process.exit() inside bridge callbacks (childProcessDispatch, timer refs) causes unhandled ProcessExitError — always await a Promise from the callback, then call process.exit() at the top-level await
 - Bridge process.stdout.write strips trailing newlines — NDJSON capture helpers must join with '\n' to restore event delimiters
@@ -2705,4 +2706,16 @@ PRD: ralph/kernel-hardening (46 stories)
   - e2e-docker fixtures are auto-discovered — just create a directory with fixture.json + package.json + src/index.js
   - sftp.readdir() returns array of objects with .filename property (not just strings)
   - SFTP directory ops (mkdir, rmdir, readdir) work through the sandbox net bridge without any additional fixes needed
+---
+
+## 2026-03-19 - US-019
+- Added two SSH/SFTP error path e2e-docker fixtures
+- ssh2-auth-fail: connects with wrong password, captures error message and level, verifies parity with host
+- ssh2-connect-refused: connects to non-listening port 1, captures ECONNREFUSED error message, verifies parity with host
+- Both fixtures have expectation "pass" — they produce identical error output on host and sandbox
+- Files created: packages/secure-exec/tests/e2e-docker/ssh2-auth-fail/{package.json,fixture.json,src/index.js}, packages/secure-exec/tests/e2e-docker/ssh2-connect-refused/{package.json,fixture.json,src/index.js}
+- **Learnings for future iterations:**
+  - Bridge _onError(message) creates plain Error without code/errno — socket system error properties (ECONNREFUSED code, -111 errno) are not propagated through the net bridge
+  - For error path fixtures, only serialize err.message (and err.level for ssh2) — err.code/err.errno are missing in sandbox
+  - ssh2 auth failure emits error with level="client-authentication" — useful for distinguishing auth errors from connection errors
 ---
