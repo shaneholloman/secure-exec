@@ -1,3 +1,4 @@
+import ivm from "isolated-vm";
 import { getIsolateRuntimeSource } from "@secure-exec/core";
 import type { ResolutionCache } from "@secure-exec/core/internal/package-bundler";
 import { transformDynamicImport } from "@secure-exec/core/internal/shared/esm-utils";
@@ -35,26 +36,18 @@ type ExecuteOptions = {
 	onStdio?: StdioHook;
 };
 
-// Legacy context/reference types — isolated-vm has been removed.
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type LegacyIsolate = any;
-type LegacyContext = any;
-type LegacyReference<_T = unknown> = any;
-type LegacyModule = any;
-/* eslint-enable @typescript-eslint/no-explicit-any */
-
 /**
  * Abstraction over the runtime environment that `executeWithRuntime` depends on.
- *
- * @deprecated This interface used isolated-vm types. The V8-based driver in
- * execution-driver.ts replaces this execution loop entirely.
+ * The `NodeRuntime` class implements this interface, providing all the
+ * isolate setup, module loading, and bridge wiring that the generic
+ * execution loop delegates to.
  */
 type ExecutionRuntime = {
-	isolate: LegacyIsolate;
-	esmModuleCache: Map<string, LegacyModule>;
-	esmModuleReverseCache: Map<LegacyModule, string>;
-	dynamicImportCache: Map<string, LegacyReference>;
-	dynamicImportPending: Map<string, Promise<LegacyReference | null>>;
+	isolate: ivm.Isolate;
+	esmModuleCache: Map<string, ivm.Module>;
+	esmModuleReverseCache: Map<ivm.Module, string>;
+	dynamicImportCache: Map<string, ivm.Reference<unknown>>;
+	dynamicImportPending: Map<string, Promise<ivm.Reference<unknown> | null>>;
 	resolutionCache: ResolutionCache;
 	moduleFormatCache: Map<string, "esm" | "cjs" | "json">;
 	packageTypeCache: Map<string, "module" | "commonjs" | null>;
@@ -62,56 +55,56 @@ type ExecutionRuntime = {
 	getExecutionTimeoutMs(override?: number): number | undefined;
 	getExecutionDeadlineMs(timeoutMs?: number): number | undefined;
 	setupConsole(
-		context: LegacyContext,
-		jail: LegacyReference,
+		context: ivm.Context,
+		jail: ivm.Reference<Record<string, unknown>>,
 		onStdio?: StdioHook,
 	): Promise<void>;
 	shouldRunAsESM(code: string, filePath?: string): Promise<boolean>;
 	setupESMGlobals(
-		context: LegacyContext,
-		jail: LegacyReference,
+		context: ivm.Context,
+		jail: ivm.Reference<Record<string, unknown>>,
 		timingMitigation: TimingMitigation,
 		frozenTimeMs: number,
 	): Promise<void>;
 	applyExecutionOverrides(
-		context: LegacyContext,
+		context: ivm.Context,
 		env?: Record<string, string>,
 		cwd?: string,
 		stdin?: string,
 	): Promise<void>;
 	precompileDynamicImports(
 		transformedCode: string,
-		context: LegacyContext,
+		context: ivm.Context,
 		referrerPath?: string,
 	): Promise<void>;
 	setupDynamicImport(
-		context: LegacyContext,
-		jail: LegacyReference,
+		context: ivm.Context,
+		jail: ivm.Reference<Record<string, unknown>>,
 		referrerPath?: string,
 		executionDeadlineMs?: number,
 	): Promise<void>;
 	runESM(
 		code: string,
-		context: LegacyContext,
+		context: ivm.Context,
 		filePath?: string,
 		executionDeadlineMs?: number,
 	): Promise<unknown>;
 	setupRequire(
-		context: LegacyContext,
-		jail: LegacyReference,
+		context: ivm.Context,
+		jail: ivm.Reference<Record<string, unknown>>,
 		timingMitigation: TimingMitigation,
 		frozenTimeMs: number,
 	): Promise<void>;
-	initCommonJsModuleGlobals(context: LegacyContext): Promise<void>;
-	applyCustomGlobalExposurePolicy(context: LegacyContext): Promise<void>;
-	setCommonJsFileGlobals(context: LegacyContext, filePath: string): Promise<void>;
+	initCommonJsModuleGlobals(context: ivm.Context): Promise<void>;
+	applyCustomGlobalExposurePolicy(context: ivm.Context): Promise<void>;
+	setCommonJsFileGlobals(context: ivm.Context, filePath: string): Promise<void>;
 	awaitScriptResult(
-		context: LegacyContext,
+		context: ivm.Context,
 		executionDeadlineMs?: number,
 	): Promise<void>;
 	getExecutionRunOptions(
 		executionDeadlineMs?: number,
-	): { timeout?: number };
+	): Pick<ivm.ScriptRunOptions, "timeout">;
 	runWithExecutionDeadline<T>(
 		operation: Promise<T>,
 		executionDeadlineMs?: number,
@@ -125,8 +118,11 @@ type ExecutionRuntime = {
 /**
  * Core execution loop shared between `run()` and `exec()` modes.
  *
- * @deprecated This function used isolated-vm internals. The V8-based driver
- * in execution-driver.ts replaces this execution loop entirely.
+ * Creates a fresh V8 context, installs console/bridge/module globals, detects
+ * ESM vs CJS format, compiles and runs the code, waits for active handles
+ * (child processes, HTTP servers) to drain, and returns the exit code.
+ *
+ * On timeout the isolate is recycled to free any stuck V8 state.
  */
 export async function executeWithRuntime<T = unknown>(
 	runtime: ExecutionRuntime,

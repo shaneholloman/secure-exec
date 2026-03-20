@@ -115,7 +115,10 @@ export function createRequire(filename: string | URL): RequireFunction {
     request: string,
     _options?: { paths?: string[] }
   ): string {
-    const resolved = _resolveModule(request, dirname);
+    const resolved = _resolveModule.applySyncPromise(undefined, [
+      request,
+      dirname,
+    ]);
     if (resolved === null) {
       const err = new Error("Cannot find module '" + request + "'") as NodeJS.ErrnoException;
       err.code = "MODULE_NOT_FOUND";
@@ -211,7 +214,10 @@ export class Module {
     (moduleRequire as { resolve?: (request: string) => string }).resolve = (
       request: string
     ): string => {
-      const resolved = _resolveModule(request, this.path);
+      const resolved = _resolveModule.applySyncPromise(undefined, [
+        request,
+        this.path,
+      ]);
       if (resolved === null) {
         const err = new Error("Cannot find module '" + request + "'") as NodeJS.ErrnoException;
         err.code = "MODULE_NOT_FOUND";
@@ -252,7 +258,10 @@ export class Module {
     _options?: unknown
   ): string {
     const parentDir = parent && parent.path ? parent.path : "/";
-    const resolved = _resolveModule(request, parentDir);
+    const resolved = _resolveModule.applySyncPromise(undefined, [
+      request,
+      parentDir,
+    ]);
     if (resolved === null) {
       const err = new Error("Cannot find module '" + request + "'") as NodeJS.ErrnoException;
       err.code = "MODULE_NOT_FOUND";

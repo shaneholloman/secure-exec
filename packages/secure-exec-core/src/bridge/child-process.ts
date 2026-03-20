@@ -496,12 +496,13 @@ function execSync(
   // Default maxBuffer 1MB (Node.js convention)
   const maxBuffer = opts.maxBuffer ?? 1024 * 1024;
 
-  // Use synchronous bridge call
-  const result = _childProcessSpawnSync(
+  // Use synchronous bridge call - result is JSON string
+  const jsonResult = _childProcessSpawnSync.applySyncPromise(undefined, [
     "bash",
     JSON.stringify(["-c", command]),
     JSON.stringify({ cwd: opts.cwd, env: opts.env as Record<string, string>, maxBuffer }),
-  );
+  ]);
+  const result = JSON.parse(jsonResult) as { stdout: string; stderr: string; code: number; maxBufferExceeded?: boolean };
 
   if (result.maxBufferExceeded) {
     const err: ExecError = new Error("stdout maxBuffer length exceeded");
@@ -553,11 +554,11 @@ function spawn(
     const effectiveCwd = opts.cwd ?? (typeof process !== "undefined" ? process.cwd() : "/");
 
     // Streaming mode - spawn immediately
-    const sessionId = _childProcessSpawnStart(
+    const sessionId = _childProcessSpawnStart.applySync(undefined, [
       command,
       JSON.stringify(argsArray),
       JSON.stringify({ cwd: effectiveCwd, env: opts.env }),
-    );
+    ]);
 
     activeChildren.set(sessionId, child);
 
@@ -572,13 +573,13 @@ function spawn(
       if (typeof _childProcessStdinWrite === "undefined") return false;
       const bytes =
         typeof data === "string" ? new TextEncoder().encode(data) : (data as Uint8Array);
-      _childProcessStdinWrite(sessionId, bytes);
+      _childProcessStdinWrite.applySync(undefined, [sessionId, bytes]);
       return true;
     };
 
     child.stdin.end = (): void => {
       if (typeof _childProcessStdinClose !== "undefined") {
-        _childProcessStdinClose(sessionId);
+        _childProcessStdinClose.applySync(undefined, [sessionId]);
       }
       child.stdin.writable = false;
     };
@@ -592,7 +593,7 @@ function spawn(
           : signal === "SIGINT" || signal === 2
             ? 2
             : 15;
-      _childProcessKill(sessionId, sig);
+      _childProcessKill.applySync(undefined, [sessionId, sig]);
       child.killed = true;
       child.signalCode = (
         typeof signal === "string" ? signal : "SIGTERM"
@@ -663,12 +664,13 @@ function spawnSync(
     // Pass maxBuffer through to host for enforcement
     const maxBuffer = opts.maxBuffer as number | undefined;
 
-    // Args and options passed as JSON strings for transferability
-    const result = _childProcessSpawnSync(
+    // Args passed as JSON string for transferability
+    const jsonResult = _childProcessSpawnSync.applySyncPromise(undefined, [
       command,
       JSON.stringify(argsArray),
       JSON.stringify({ cwd: effectiveCwd, env: opts.env as Record<string, string>, maxBuffer }),
-    );
+    ]);
+    const result = JSON.parse(jsonResult) as { stdout: string; stderr: string; code: number; maxBufferExceeded?: boolean };
 
     const stdoutBuf = typeof Buffer !== "undefined" ? Buffer.from(result.stdout) : result.stdout;
     const stderrBuf = typeof Buffer !== "undefined" ? Buffer.from(result.stderr) : result.stderr;

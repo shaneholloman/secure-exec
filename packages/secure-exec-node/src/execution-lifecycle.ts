@@ -1,3 +1,4 @@
+import ivm from "isolated-vm";
 import { getIsolateRuntimeSource } from "@secure-exec/core";
 import {
 	HARDENED_NODE_CUSTOM_GLOBALS,
@@ -11,18 +12,11 @@ import {
 import type { Permissions } from "@secure-exec/core";
 import type { TimingMitigation } from "@secure-exec/core/internal/shared/api-types";
 
-// Legacy context type — isolated-vm has been removed.
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type LegacyContext = any;
-/* eslint-enable @typescript-eslint/no-explicit-any */
-
 /**
  * Apply runtime overrides used by script-style execution.
- *
- * @deprecated Legacy function for isolated-vm contexts. V8-based driver handles this.
  */
 export async function applyExecutionOverrides(
-	context: LegacyContext,
+	context: ivm.Context,
 	permissions: Permissions | undefined,
 	env?: Record<string, string>,
 	cwd?: string,
@@ -38,20 +32,16 @@ export async function applyExecutionOverrides(
 
 /**
  * Initialize mutable CommonJS globals before script execution.
- *
- * @deprecated Legacy function for isolated-vm contexts.
  */
-export async function initCommonJsModuleGlobals(context: LegacyContext): Promise<void> {
+export async function initCommonJsModuleGlobals(context: ivm.Context): Promise<void> {
 	await context.eval(getIsolateRuntimeSource("initCommonjsModuleGlobals"));
 }
 
 /**
  * Set CommonJS file globals for accurate relative require() behavior.
- *
- * @deprecated Legacy function for isolated-vm contexts.
  */
 export async function setCommonJsFileGlobals(
-	context: LegacyContext,
+	context: ivm.Context,
 	filePath: string,
 ): Promise<void> {
 	const dirname = filePath.includes("/")
@@ -67,10 +57,8 @@ export async function setCommonJsFileGlobals(
 
 /**
  * Apply descriptor policy to custom globals before user code executes.
- *
- * @deprecated Legacy function for isolated-vm contexts.
  */
-export async function applyCustomGlobalExposurePolicy(context: LegacyContext): Promise<void> {
+export async function applyCustomGlobalExposurePolicy(context: ivm.Context): Promise<void> {
 	await context.global.set(
 		"__runtimeCustomGlobalPolicy",
 		{
@@ -84,11 +72,9 @@ export async function applyCustomGlobalExposurePolicy(context: LegacyContext): P
 
 /**
  * Await script result when eval() returns a Promise.
- *
- * @deprecated Legacy function for isolated-vm contexts.
  */
 export async function awaitScriptResult(
-	context: LegacyContext,
+	context: ivm.Context,
 	executionDeadlineMs?: number,
 ): Promise<void> {
 	const hasPromise = await context.eval(
@@ -111,23 +97,23 @@ export async function awaitScriptResult(
 
 /**
  * Override process.env and process.cwd for a specific execution context.
- *
- * @deprecated Legacy function for isolated-vm contexts.
  */
 export async function overrideProcessConfig(
-	context: LegacyContext,
+	context: ivm.Context,
 	permissions: Permissions | undefined,
 	env?: Record<string, string>,
 	cwd?: string,
 ): Promise<void> {
 	if (env) {
 		const filtered = filterEnv(env, permissions);
+		// Merge provided env with existing env.
 		await context.global.set("__runtimeProcessEnvOverride", filtered, {
 			copy: true,
 		});
 		await context.eval(getIsolateRuntimeSource("overrideProcessEnv"));
 	}
 	if (cwd) {
+		// Override cwd.
 		await context.global.set("__runtimeProcessCwdOverride", cwd, {
 			copy: true,
 		});
@@ -137,13 +123,14 @@ export async function overrideProcessConfig(
 
 /**
  * Set stdin data for a specific execution context.
- *
- * @deprecated Legacy function for isolated-vm contexts.
+ * This injects stdin data that will be emitted when process.stdin listeners are added.
  */
 export async function setStdinData(
-	context: LegacyContext,
+	context: ivm.Context,
 	stdin: string,
 ): Promise<void> {
+	// The bridge exposes these variables for stdin management.
+	// We need to set them before the script runs so readline can access them.
 	await context.global.set("__runtimeStdinData", stdin, { copy: true });
 	await context.eval(getIsolateRuntimeSource("setStdinData"));
 }

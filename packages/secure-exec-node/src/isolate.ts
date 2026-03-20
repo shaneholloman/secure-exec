@@ -1,3 +1,4 @@
+import ivm from "isolated-vm";
 import type { TimingMitigation } from "@secure-exec/core/internal/shared/api-types";
 import {
 	TIMEOUT_ERROR_MESSAGE as _TIMEOUT_ERROR_MESSAGE,
@@ -17,14 +18,9 @@ export class ExecutionTimeoutError extends Error {
 	}
 }
 
-/**
- * Create a new V8 isolate with the given heap memory limit (in MB).
- *
- * @deprecated This function required isolated-vm which has been removed.
- * Use @secure-exec/v8 createV8Runtime() instead.
- */
-export function createIsolate(_memoryLimit: number): unknown {
-	throw new Error("createIsolate() is no longer available. Use @secure-exec/v8 createV8Runtime() instead.");
+/** Create a new V8 isolate with the given heap memory limit (in MB). */
+export function createIsolate(memoryLimit: number): ivm.Isolate {
+	return new ivm.Isolate({ memoryLimit });
 }
 
 /** Convert a relative timeout duration into an absolute wall-clock deadline. */
@@ -36,12 +32,12 @@ export function getExecutionDeadlineMs(timeoutMs?: number): number | undefined {
 }
 
 /**
- * Build execution run options with a timeout derived from the remaining
+ * Build isolated-vm `ScriptRunOptions` with a timeout derived from the remaining
  * wall-clock budget. Throws immediately if the deadline has already passed.
  */
 export function getExecutionRunOptions(
 	executionDeadlineMs?: number,
-): { timeout?: number } {
+): Pick<ivm.ScriptRunOptions, "timeout"> {
 	if (executionDeadlineMs === undefined) {
 		return {};
 	}
@@ -85,7 +81,7 @@ export async function runWithExecutionDeadline<T>(
 
 /**
  * Detect timeout errors from both our own `ExecutionTimeoutError` and
- * V8 runtime timeout messages.
+ * isolated-vm's native timeout messages.
  */
 export function isExecutionTimeoutError(error: unknown): boolean {
 	if (error instanceof ExecutionTimeoutError) {

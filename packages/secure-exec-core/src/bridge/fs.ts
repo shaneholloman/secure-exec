@@ -1031,12 +1031,12 @@ const fs = {
     try {
       if (encoding) {
         // Text mode - use text read
-        const content = _fs.readFile(pathStr);
+        const content = _fs.readFile.applySyncPromise(undefined, [pathStr]);
         return content;
       } else {
-        // Binary mode - host returns raw Uint8Array via MessagePack bin
-        const binaryData = _fs.readFileBinary(pathStr);
-        return Buffer.from(binaryData);
+        // Binary mode - use binary read with base64 encoding
+        const base64Content = _fs.readFileBinary.applySyncPromise(undefined, [pathStr]);
+        return Buffer.from(base64Content, "base64");
       }
     } catch (err) {
       const errMsg = (err as Error).message || String(err);
@@ -1079,14 +1079,15 @@ const fs = {
     if (typeof data === "string") {
       // Text mode - use text write
       // Return the result so async callers (fs.promises) can await it.
-      return _fs.writeFile(pathStr, data);
+      return _fs.writeFile.applySyncPromise(undefined, [pathStr, data]);
     } else if (ArrayBuffer.isView(data)) {
-      // Binary mode - send raw Uint8Array via MessagePack bin
+      // Binary mode - convert to base64 and use binary write
       const uint8 = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-      return _fs.writeFileBinary(pathStr, uint8);
+      const base64 = Buffer.from(uint8).toString("base64");
+      return _fs.writeFileBinary.applySyncPromise(undefined, [pathStr, base64]);
     } else {
       // Fallback to text mode
-      return _fs.writeFile(pathStr, String(data));
+      return _fs.writeFile.applySyncPromise(undefined, [pathStr, String(data)]);
     }
   },
 
@@ -1105,9 +1106,9 @@ const fs = {
   readdirSync(path: PathLike, options?: nodeFs.ObjectEncodingOptions & { withFileTypes?: boolean; recursive?: boolean }): string[] | Dirent[] {
     const rawPath = toPathString(path);
     const pathStr = rawPath;
-    let entries: Array<{ name: string; isDirectory: boolean }>;
+    let entriesJson: string;
     try {
-      entries = _fs.readDir(pathStr);
+      entriesJson = _fs.readDir.applySyncPromise(undefined, [pathStr]);
     } catch (err) {
       // Convert "entry not found" and similar errors to proper ENOENT
       const errMsg = (err as Error).message || String(err);
@@ -1121,6 +1122,10 @@ const fs = {
       }
       throw err;
     }
+    const entries = JSON.parse(entriesJson) as Array<{
+      name: string;
+      isDirectory: boolean;
+    }>;
     if (options?.withFileTypes) {
       return entries.map((e) => new Dirent(e.name, e.isDirectory, rawPath));
     }
@@ -1131,13 +1136,13 @@ const fs = {
     const rawPath = toPathString(path);
     const pathStr = rawPath;
     const recursive = typeof options === "object" ? options?.recursive ?? false : false;
-    _fs.mkdir(pathStr, recursive);
+    _fs.mkdir.applySyncPromise(undefined, [pathStr, recursive]);
     return recursive ? rawPath : undefined;
   },
 
   rmdirSync(path: PathLike, _options?: RmDirOptions): void {
     const pathStr = toPathString(path);
-    _fs.rmdir(pathStr);
+    _fs.rmdir.applySyncPromise(undefined, [pathStr]);
   },
 
   rmSync(path: PathLike, options?: { force?: boolean; recursive?: boolean }): void {
@@ -1175,15 +1180,15 @@ const fs = {
 
   existsSync(path: PathLike): boolean {
     const pathStr = toPathString(path);
-    return _fs.exists(pathStr);
+    return _fs.exists.applySyncPromise(undefined, [pathStr]);
   },
 
   statSync(path: PathLike, _options?: nodeFs.StatSyncOptions): Stats {
     const rawPath = toPathString(path);
     const pathStr = rawPath;
-    let stat: { mode: number; size: number; isDirectory: boolean; atimeMs: number; mtimeMs: number; ctimeMs: number; birthtimeMs: number };
+    let statJson: string;
     try {
-      stat = _fs.stat(pathStr);
+      statJson = _fs.stat.applySyncPromise(undefined, [pathStr]);
     } catch (err) {
       // Convert various "not found" errors to proper ENOENT
       const errMsg = (err as Error).message || String(err);
@@ -1202,24 +1207,42 @@ const fs = {
       }
       throw err;
     }
+    const stat = JSON.parse(statJson) as {
+      mode: number;
+      size: number;
+      atimeMs?: number;
+      mtimeMs?: number;
+      ctimeMs?: number;
+      birthtimeMs?: number;
+    };
     return new Stats(stat);
   },
 
   lstatSync(path: PathLike, _options?: nodeFs.StatSyncOptions): Stats {
     const pathStr = toPathString(path);
-    const stat = bridgeCall(() => _fs.lstat(pathStr), "lstat", pathStr);
+    const statJson = bridgeCall(() => _fs.lstat.applySyncPromise(undefined, [pathStr]), "lstat", pathStr);
+    const stat = JSON.parse(statJson) as {
+      mode: number;
+      size: number;
+      isDirectory: boolean;
+      isSymbolicLink?: boolean;
+      atimeMs?: number;
+      mtimeMs?: number;
+      ctimeMs?: number;
+      birthtimeMs?: number;
+    };
     return new Stats(stat);
   },
 
   unlinkSync(path: PathLike): void {
     const pathStr = toPathString(path);
-    _fs.unlink(pathStr);
+    _fs.unlink.applySyncPromise(undefined, [pathStr]);
   },
 
   renameSync(oldPath: PathLike, newPath: PathLike): void {
     const oldPathStr = toPathString(oldPath);
     const newPathStr = toPathString(newPath);
-    _fs.rename(oldPathStr, newPathStr);
+    _fs.rename.applySyncPromise(undefined, [oldPathStr, newPathStr]);
   },
 
   copyFileSync(src: PathLike, dest: PathLike, _mode?: number): void {
@@ -1550,41 +1573,41 @@ const fs = {
   chmodSync(path: PathLike, mode: Mode): void {
     const pathStr = toPathString(path);
     const modeNum = typeof mode === "string" ? parseInt(mode, 8) : mode;
-    bridgeCall(() => _fs.chmod(pathStr, modeNum), "chmod", pathStr);
+    bridgeCall(() => _fs.chmod.applySyncPromise(undefined, [pathStr, modeNum]), "chmod", pathStr);
   },
 
   chownSync(path: PathLike, uid: number, gid: number): void {
     const pathStr = toPathString(path);
-    bridgeCall(() => _fs.chown(pathStr, uid, gid), "chown", pathStr);
+    bridgeCall(() => _fs.chown.applySyncPromise(undefined, [pathStr, uid, gid]), "chown", pathStr);
   },
 
   linkSync(existingPath: PathLike, newPath: PathLike): void {
     const existingStr = toPathString(existingPath);
     const newStr = toPathString(newPath);
-    bridgeCall(() => _fs.link(existingStr, newStr), "link", newStr);
+    bridgeCall(() => _fs.link.applySyncPromise(undefined, [existingStr, newStr]), "link", newStr);
   },
 
   symlinkSync(target: PathLike, path: PathLike, _type?: string | null): void {
     const targetStr = toPathString(target);
     const pathStr = toPathString(path);
-    bridgeCall(() => _fs.symlink(targetStr, pathStr), "symlink", pathStr);
+    bridgeCall(() => _fs.symlink.applySyncPromise(undefined, [targetStr, pathStr]), "symlink", pathStr);
   },
 
   readlinkSync(path: PathLike, _options?: nodeFs.EncodingOption): string {
     const pathStr = toPathString(path);
-    return bridgeCall(() => _fs.readlink(pathStr), "readlink", pathStr);
+    return bridgeCall(() => _fs.readlink.applySyncPromise(undefined, [pathStr]), "readlink", pathStr);
   },
 
   truncateSync(path: PathLike, len?: number | null): void {
     const pathStr = toPathString(path);
-    bridgeCall(() => _fs.truncate(pathStr, len ?? 0), "truncate", pathStr);
+    bridgeCall(() => _fs.truncate.applySyncPromise(undefined, [pathStr, len ?? 0]), "truncate", pathStr);
   },
 
   utimesSync(path: PathLike, atime: string | number | Date, mtime: string | number | Date): void {
     const pathStr = toPathString(path);
     const atimeNum = typeof atime === "number" ? atime : new Date(atime).getTime() / 1000;
     const mtimeNum = typeof mtime === "number" ? mtime : new Date(mtime).getTime() / 1000;
-    bridgeCall(() => _fs.utimes(pathStr, atimeNum, mtimeNum), "utimes", pathStr);
+    bridgeCall(() => _fs.utimes.applySyncPromise(undefined, [pathStr, atimeNum, mtimeNum]), "utimes", pathStr);
   },
 
   // Async methods - wrap sync methods in callbacks/promises
