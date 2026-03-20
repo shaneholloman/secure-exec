@@ -393,8 +393,8 @@
         "Tests pass"
       ],
       "priority": 22,
-      "passes": false,
-      "notes": "pg.Pool is how everyone uses pg in production. The current fixture only uses pg.Client. Pool acquire/release, idle timeout, and concurrent query dispatch are completely untested."
+      "passes": true,
+      "notes": "Completed. Fixture pg-pool tests pool.connect()+client.query()+client.release(), pool.query() shorthand, concurrent queries via Promise.all, and pool.end(). Host and sandbox produce identical output."
     },
     {
       "id": "US-023",

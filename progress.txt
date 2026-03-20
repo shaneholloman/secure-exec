@@ -2741,3 +2741,13 @@ PRD: ralph/kernel-hardening (46 stories)
   - Parameterized queries ($1, $2) work correctly for UPDATE and DELETE through the sandbox
   - Transaction state tracking (rollback isolation, commit persistence) passes parity between host and sandbox
 ---
+
+## 2026-03-19 - US-022
+- Added pg-pool e2e-docker fixture for connection pooling
+- Fixture tests: pool.connect() + client.query() + client.release(), pool.query() shorthand, concurrent queries via Promise.all(), pool.end() cleanup
+- Files changed: packages/secure-exec/tests/e2e-docker/pg-pool/{package.json,fixture.json,src/index.js}
+- **Learnings for future iterations:**
+  - pg.Pool works through the sandbox net bridge without any additional fixes needed — pool connection management (acquire/release) is all in user-space JS
+  - Concurrent queries via Promise.all through the pool work correctly — the sandbox handles multiple simultaneous TCP connections through the net bridge
+  - pg-pool fixture follows the exact same pattern as pg-connect (same pg version, same env vars, same error handling)
+---
