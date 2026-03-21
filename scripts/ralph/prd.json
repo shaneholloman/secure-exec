@@ -382,7 +382,7 @@
         "Typecheck passes"
       ],
       "priority": 23,
-      "passes": false,
+      "passes": true,
       "notes": "CLI Tool E2E Phase 1. Pi is pure JS — runs inside the isolate VM (deepest emulation test). Mock server is reused by all later CLI tool test phases."
     },
     {
@@ -404,7 +404,7 @@
         "Typecheck passes"
       ],
       "priority": 24,
-      "passes": false,
+      "passes": true,
       "notes": "CLI Tool E2E Phase 2. Depends on US-022 (isTTY/setRawMode) and US-023 (mock server + Pi dependency)."
     },
     {
@@ -426,7 +426,7 @@
         "Typecheck passes"
       ],
       "priority": 25,
-      "passes": false,
+      "passes": true,
       "notes": "CLI Tool E2E Phase 3. OpenCode is a compiled Bun binary — spawned on host via child_process bridge, not in-VM. Reuses mock LLM server from US-023."
     },
     {
