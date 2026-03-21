@@ -342,7 +342,7 @@
         "Typecheck passes"
       ],
       "priority": 21,
-      "passes": false,
+      "passes": true,
       "notes": "Custom bindings Phase 3. ~200 LOC tests. Depends on US-019 and US-020."
     },
     {
@@ -360,7 +360,7 @@
         "Typecheck passes"
       ],
       "priority": 22,
-      "passes": false,
+      "passes": true,
       "notes": "CLI Tool E2E Phase 0 — bridge prerequisites. Must be completed before interactive CLI tool tests (US-025, US-027, US-029)."
     },
     {

@@ -353,6 +353,7 @@ export class NodeExecutionDriver implements RuntimeDriver {
 			activeChildProcesses: new Map(),
 			activeHostTimers: new Set(),
 			resolutionCache: createResolutionCache(),
+			onPtySetRawMode: options.onPtySetRawMode,
 		};
 
 		// Validate and flatten bindings once at construction time
@@ -760,6 +761,16 @@ function buildPostRestoreScript(
 	// Inject process and OS config
 	parts.push(`globalThis.${getProcessConfigGlobalKey()} = ${JSON.stringify(processConfig)};`);
 	parts.push(`globalThis.${getOsConfigGlobalKey()} = ${JSON.stringify(osConfig)};`);
+
+	// Inject TTY config separately — InjectGlobals overwrites _processConfig,
+	// so TTY flags need their own global that persists
+	if (processConfig.stdinIsTTY || processConfig.stdoutIsTTY || processConfig.stderrIsTTY) {
+		parts.push(`globalThis.__runtimeTtyConfig = ${JSON.stringify({
+			stdinIsTTY: processConfig.stdinIsTTY,
+			stdoutIsTTY: processConfig.stdoutIsTTY,
+			stderrIsTTY: processConfig.stderrIsTTY,
+		})};`);
+	}
 
 	// Inject timer/handle limits
 	if (bridgeConfig.maxTimers !== undefined) {

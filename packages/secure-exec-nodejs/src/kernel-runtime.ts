@@ -445,6 +445,11 @@ class NodeRuntimeDriver implements RuntimeDriver {
         permissions = { ...permissions, ...allowAllFs };
       }
 
+      // Detect PTY on stdio FDs
+      const stdinIsTTY = ctx.stdinIsTTY ?? false;
+      const stdoutIsTTY = ctx.stdoutIsTTY ?? false;
+      const stderrIsTTY = ctx.stderrIsTTY ?? false;
+
       const systemDriver = createNodeDriver({
         filesystem,
         commandExecutor,
@@ -453,8 +458,21 @@ class NodeRuntimeDriver implements RuntimeDriver {
           cwd: ctx.cwd,
           env: ctx.env,
           argv: [process.execPath, filePath ?? command, ...args],
+          stdinIsTTY,
+          stdoutIsTTY,
+          stderrIsTTY,
         },
       });
+
+      // Wire PTY raw mode callback when stdin is a terminal
+      const onPtySetRawMode = stdinIsTTY
+        ? (mode: boolean) => {
+            kernel.ptySetDiscipline(ctx.pid, 0, {
+              canonical: !mode,
+              echo: !mode,
+            });
+          }
+        : undefined;
 
       // Create a per-process isolate
       const executionDriver = new NodeExecutionDriver({
@@ -462,6 +480,7 @@ class NodeRuntimeDriver implements RuntimeDriver {
         runtime: systemDriver.runtime,
         memoryLimit: this._memoryLimit,
         bindings: this._bindings,
+        onPtySetRawMode,
       });
       this._activeDrivers.set(ctx.pid, executionDriver);
 

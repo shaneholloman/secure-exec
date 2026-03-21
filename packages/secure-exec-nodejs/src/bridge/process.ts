@@ -296,10 +296,18 @@ interface StdioWriteStream {
   rows: number;
 }
 
-// Resolve isTTY flags from config
-const _stdinIsTTY = (typeof _processConfig !== "undefined" && _processConfig.stdinIsTTY) || false;
-const _stdoutIsTTY = (typeof _processConfig !== "undefined" && _processConfig.stdoutIsTTY) || false;
-const _stderrIsTTY = (typeof _processConfig !== "undefined" && _processConfig.stderrIsTTY) || false;
+// Lazy TTY flag readers — __runtimeTtyConfig is set by postRestoreScript
+// (cannot use _processConfig because InjectGlobals overwrites it later)
+declare const __runtimeTtyConfig: { stdinIsTTY?: boolean; stdoutIsTTY?: boolean; stderrIsTTY?: boolean } | undefined;
+function _getStdinIsTTY(): boolean {
+  return (typeof __runtimeTtyConfig !== "undefined" && __runtimeTtyConfig.stdinIsTTY) || false;
+}
+function _getStdoutIsTTY(): boolean {
+  return (typeof __runtimeTtyConfig !== "undefined" && __runtimeTtyConfig.stdoutIsTTY) || false;
+}
+function _getStderrIsTTY(): boolean {
+  return (typeof __runtimeTtyConfig !== "undefined" && __runtimeTtyConfig.stderrIsTTY) || false;
+}
 
 // Stdout stream
 const _stdout: StdioWriteStream = {
@@ -322,7 +330,7 @@ const _stdout: StdioWriteStream = {
     return false;
   },
   writable: true,
-  isTTY: _stdoutIsTTY,
+  get isTTY(): boolean { return _getStdoutIsTTY(); },
   columns: 80,
   rows: 24,
 };
@@ -348,7 +356,7 @@ const _stderr: StdioWriteStream = {
     return false;
   },
   writable: true,
-  isTTY: _stderrIsTTY,
+  get isTTY(): boolean { return _getStderrIsTTY(); },
   columns: 80,
   rows: 24,
 };
@@ -501,7 +509,7 @@ const _stdin: StdinStream = {
   },
 
   setRawMode(mode: boolean): StdinStream {
-    if (!_stdinIsTTY) {
+    if (!_getStdinIsTTY()) {
       throw new Error("setRawMode is not supported when stdin is not a TTY");
     }
     if (typeof _ptySetRawMode !== "undefined") {
@@ -510,7 +518,7 @@ const _stdin: StdinStream = {
     return this;
   },
 
-  isTTY: _stdinIsTTY,
+  get isTTY(): boolean { return _getStdinIsTTY(); },
 
   // For readline compatibility
   [Symbol.asyncIterator]: async function* () {

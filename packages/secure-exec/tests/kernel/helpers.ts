@@ -12,19 +12,19 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createKernel } from '../../../kernel/src/index.ts';
-import type { Kernel, VirtualFileSystem } from '../../../kernel/src/index.ts';
-import { InMemoryFileSystem } from '../../../os/browser/src/index.ts';
-import { createWasmVmRuntime } from '../../../runtime/wasmvm/src/index.ts';
-import { createNodeRuntime } from '../../../runtime/node/src/index.ts';
-import { createPythonRuntime } from '../../../runtime/python/src/index.ts';
+import { createKernel } from '../../../secure-exec-core/src/kernel/index.ts';
+import type { Kernel, VirtualFileSystem } from '../../../secure-exec-core/src/kernel/index.ts';
+import { InMemoryFileSystem } from '../../../secure-exec-browser/src/os-filesystem.ts';
+import { createWasmVmRuntime } from '../../../secure-exec-wasmvm/src/index.ts';
+import { createNodeRuntime } from '../../../secure-exec-nodejs/src/kernel-runtime.ts';
+import { createPythonRuntime } from '../../../secure-exec-python/src/kernel-runtime.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // WASM standalone binaries directory (relative to this file → repo root)
 const COMMANDS_DIR = resolve(
   __dirname,
-  '../../../../wasmvm/target/wasm32-wasip1/release/commands',
+  '../../../../native/wasmvm/target/wasm32-wasip1/release/commands',
 );
 
 export interface IntegrationKernelResult {

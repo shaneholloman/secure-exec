@@ -36,6 +36,14 @@
 - Test files in packages/secure-exec-wasmvm/test/ use ../../../native/wasmvm/target/ for WASM binary paths (3 levels up from test/ to repo root)
 - Custom bindings types/validation/flattening live in secure-exec-nodejs/src/bindings.ts — flattened __bind.* keys merge into bridgeHandlers Record
 - BridgeHandler = (...args: unknown[]) => unknown | Promise<unknown> — both sync and async handlers work through the same V8 IPC bridge
+- Custom binding handlers must be in BOTH bridgeHandlers AND dispatchHandlers (the _loadPolyfill dispatch map) — bridgeHandlers alone won't reach host-side via __bd: protocol
+- The inflation snippet cannot read binding functions from globalThis because custom __bind.* keys are not installed as V8 native globals — must create dispatch wrappers directly in the tree
+- @secure-exec/nodejs package exports resolve to dist/ not src/ — MUST rebuild (pnpm turbo build) after source changes before tests pick them up
+- Async binding handlers are resolved synchronously via _loadPolyfill.applySyncPromise — sandbox code gets the resolved value directly, not a Promise
+- V8 InjectGlobals overwrites _processConfig after postRestoreScript — per-session config that must survive needs its own global (e.g. __runtimeTtyConfig)
+- Bridge IIFE values from warmup snapshot are frozen — session-varying config must be read via lazy getters, not top-level const
+- openShell({ command: 'node', args: [...] }) spawns node directly with PTY — no WasmVM needed for fast PTY integration tests
+- Kernel test helpers.ts (packages/secure-exec/tests/kernel/helpers.ts) import paths must match consolidated package structure
 
 # Ralph Progress Log
 Started: Sat Mar 21 02:49:43 AM PDT 2026
@@ -569,4 +577,48 @@ Started: Sat Mar 21 02:49:43 AM PDT 2026
   - BINDING_PREFIX ("__bind.") is the separator — binding keys stored without prefix in the inflation snippet, prefixed when looking up globals
   - Object.defineProperty with writable:false, configurable:false ensures sandbox code cannot delete or overwrite SecureExec
   - deepFreeze recursion only freezes objects, not functions — leaf binding functions remain callable but their container objects are frozen
+---
+
+## 2026-03-21 - US-021
+- Implemented comprehensive custom bindings tests (16 tests total)
+- Fixed two bugs in the bindings bridge discovered during testing:
+  1. Binding handlers were missing from _loadPolyfill dispatchHandlers — added them to the dispatch map in executeInternal()
+  2. Inflation snippet tried to read __bind.* globals from globalThis, but V8 runtime doesn't install custom keys as native globals — rewrote snippet to build dispatch wrappers directly into the tree
+- Validation tests (8 tests): rejects invalid identifiers, nesting >4, >64 leaves, underscore prefix, plus positive cases for flattening and async detection
+- Integration tests (8 tests): round-trip nested bindings, sync/async, frozen mutation protection, complex type serialization, empty SecureExec global, __bind.* cleanup
+- Files changed:
+  - packages/secure-exec/tests/runtime-driver/node/bindings.test.ts (new — 16 tests)
+  - packages/secure-exec-nodejs/src/execution-driver.ts (inflation snippet fix + dispatch handler fix)
+- **Learnings for future iterations:**
+  - @secure-exec/nodejs resolves to dist/ during vitest — MUST rebuild before testing source changes
+  - The V8 binary only installs a fixed set of native bridge globals (SYNC_BRIDGE_FNS + ASYNC_BRIDGE_FNS) — custom keys need dispatch wrappers through _loadPolyfill
+  - _loadPolyfill serves as a dispatch multiplexer for bridge globals not natively in the V8 binary — handlers must be in the dispatchHandlers arg of buildModuleLoadingBridgeHandlers
+  - Async handlers are resolved synchronously via applySyncPromise — from sandbox perspective, binding calls are always synchronous
+  - deepFreeze only recurses into objects, not functions — leaf binding functions remain callable after tree freeze
+  - Pre-existing test failures in index.test.ts (23 failures) are unrelated to bindings changes
+---
+
+## 2026-03-21 07:28 - US-022
+- Implemented isTTY, setRawMode, HTTPS, and stream bridge gap fixes for CLI tool testing
+- Added PTY slave detection in kernel spawnInternal — ProcessContext now carries stdinIsTTY/stdoutIsTTY/stderrIsTTY
+- Wired onPtySetRawMode callback from NodeRuntimeDriver through kernel.ptySetDiscipline
+- Fixed bridge process.ts to use lazy getters for isTTY (read from __runtimeTtyConfig instead of _processConfig)
+- Fixed kernel test helpers.ts to use consolidated package import paths
+- Fixed cross-runtime-terminal test TerminalHarness import path
+- HTTPS and stream.Transform/PassThrough tests already existed in https-streams.test.ts (confirmed passing)
+- Files changed:
+  - packages/secure-exec-core/src/kernel/types.ts (ProcessContext TTY flags)
+  - packages/secure-exec-core/src/kernel/kernel.ts (isFdPtySlave helper, PTY detection in spawnInternal)
+  - packages/secure-exec-nodejs/src/bridge/process.ts (lazy isTTY getters via __runtimeTtyConfig)
+  - packages/secure-exec-nodejs/src/execution-driver.ts (__runtimeTtyConfig injection, onPtySetRawMode wiring)
+  - packages/secure-exec-nodejs/src/isolate-bootstrap.ts (onPtySetRawMode in NodeExecutionDriverOptions)
+  - packages/secure-exec-nodejs/src/kernel-runtime.ts (PTY detection, onPtySetRawMode callback to kernel)
+  - packages/secure-exec/tests/kernel/bridge-gap-behavior.test.ts (NEW - isTTY and setRawMode tests)
+  - packages/secure-exec/tests/kernel/helpers.ts (fixed stale import paths)
+  - packages/secure-exec/tests/kernel/cross-runtime-terminal.test.ts (fixed TerminalHarness import)
+- **Learnings for future iterations:**
+  - V8 InjectGlobals overwrites _processConfig AFTER postRestoreScript — per-session config that must survive InjectGlobals needs its own global (e.g. __runtimeTtyConfig)
+  - Bridge IIFE values from the warmup snapshot are frozen at snapshot time — any config that varies per session must be read lazily via getters, not top-level const
+  - openShell({ command: 'node', args: ['-e', '...'] }) can test PTY behavior without WasmVM — useful for fast integration tests
+  - kernel test helpers.ts import paths must stay in sync with package consolidation (old paths: kernel/, os/browser/, runtime/node/ → new: secure-exec-core/, secure-exec-browser/, secure-exec-nodejs/)
 ---

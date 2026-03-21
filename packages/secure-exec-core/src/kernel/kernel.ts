@@ -530,6 +530,11 @@ class KernelImpl implements Kernel {
 		const parentEntry = callerPid ? this.processTable.get(callerPid) : undefined;
 		const baseEnv = parentEntry?.env ?? this.env;
 
+		// Detect PTY slave on stdio FDs
+		const stdinIsTTY = this.isFdPtySlave(table, 0);
+		const stdoutIsTTY = this.isFdPtySlave(table, 1);
+		const stderrIsTTY = this.isFdPtySlave(table, 2);
+
 		// Build process context with pre-wired callbacks
 		const ctx: ProcessContext = {
 			pid,
@@ -537,6 +542,9 @@ class KernelImpl implements Kernel {
 			env: { ...baseEnv, ...options?.env },
 			cwd: options?.cwd ?? this.cwd,
 			fds: { stdin: 0, stdout: 1, stderr: 2 },
+			stdinIsTTY,
+			stdoutIsTTY,
+			stderrIsTTY,
 			onStdout: stdoutCb,
 			onStderr: stderrCb,
 		};
@@ -1179,6 +1187,13 @@ class KernelImpl implements Kernel {
 		const entry = table.get(fd);
 		if (!entry) return false;
 		return this.pipeManager.isPipe(entry.description.id) || this.ptyManager.isPty(entry.description.id);
+	}
+
+	/** Check if an FD in the given table refers to a PTY slave (terminal). */
+	private isFdPtySlave(table: ProcessFDTable, fd: number): boolean {
+		const entry = table.get(fd);
+		if (!entry) return false;
+		return this.ptyManager.isSlave(entry.description.id);
 	}
 
 	/**

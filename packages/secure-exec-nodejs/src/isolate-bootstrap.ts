@@ -21,6 +21,8 @@ import type { BindingTree } from "./bindings.js";
 export interface NodeExecutionDriverOptions extends RuntimeDriverOptions {
 	createIsolate?(memoryLimit: number): unknown;
 	bindings?: BindingTree;
+	/** Callback to toggle PTY raw mode — wired by kernel runtime when PTY is attached. */
+	onPtySetRawMode?: (mode: boolean) => void;
 }
 
 export interface BudgetState {
