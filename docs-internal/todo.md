@@ -224,6 +224,14 @@ See `docs-internal/specs/v8-perf-research.md` for detailed profiling data and an
   - Current approach reads/writes entire file contents; offset-based ops reduce large-file pressure
   - Files: `packages/secure-exec-core/src/bridge/fs.ts`
 
+## Custom Bindings
+
+- [ ] Implement `SecureExec.bindings` API for exposing host functions to sandbox code.
+  - Spec: `docs-internal/specs/custom-bindings.md`
+  - Nested object registration on host, auto-inflated to frozen `SecureExec.bindings.*` namespace in sandbox.
+  - No Rust changes needed — piggybacks on existing `bridgeHandlers` mechanism.
+  - Files: `packages/secure-exec-core/src/runtime.ts`, `packages/secure-exec-node/src/execution-driver.ts`, `packages/secure-exec-core/src/runtime-driver.ts`
+
 ## CI and Automation
 
 - [ ] Automated rusty_v8 version update PR
