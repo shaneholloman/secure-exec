@@ -870,9 +870,22 @@ const process: Record<string, unknown> & {
       err.syscall = "kill";
       throw err;
     }
-    // Resolve signal name to number (default SIGTERM)
+    // Resolve signal name to number and string
     const sigNum = _resolveSignal(signal);
-    // Self-kill - exit with 128 + signal number (POSIX convention)
+    const sigName = typeof signal === "string" ? signal
+      : Object.entries(_signalNumbers).find(([, n]) => n === sigNum)?.[0] ?? `SIG${sigNum}`;
+
+    // Signals with no default termination action (harmless if no handler)
+    const _harmlessSignals = new Set([28 /* SIGWINCH */, 17 /* SIGCHLD */, 23 /* SIGURG */, 18 /* SIGCONT */]);
+
+    // Try dispatching to registered signal handlers first
+    const handled = _emit(sigName, sigName);
+    if (handled) return true;
+
+    // No handler — harmless signals are silently ignored (POSIX behavior)
+    if (_harmlessSignals.has(sigNum)) return true;
+
+    // No handler for fatal signal — exit with 128 + signal number (POSIX convention)
     return (process as unknown as { exit: (code: number) => never }).exit(128 + sigNum);
   },
 

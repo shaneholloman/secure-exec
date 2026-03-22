@@ -678,7 +678,7 @@ pub(crate) const SYNC_BRIDGE_FNS: [&str; 31] = [
     "_childProcessSpawnSync",
 ];
 
-pub(crate) const ASYNC_BRIDGE_FNS: [&str; 7] = [
+pub(crate) const ASYNC_BRIDGE_FNS: [&str; 8] = [
     // Module loading (async)
     "_dynamicImport",
     // Timer
@@ -689,6 +689,8 @@ pub(crate) const ASYNC_BRIDGE_FNS: [&str; 7] = [
     "_networkHttpRequestRaw",
     "_networkHttpServerListenRaw",
     "_networkHttpServerCloseRaw",
+    // Streaming stdin (async — must not block V8 thread)
+    "_stdinRead",
 ];
 
 /// Run the session event loop: dispatch incoming messages to V8.
