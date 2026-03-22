@@ -477,8 +477,8 @@
         "pnpm --filter secure-exec exec vitest run tests/cli-tools/pi-interactive.test.ts passes with zero skipped tests (when Pi is installed)"
       ],
       "priority": 28,
-      "passes": false,
-      "notes": "US-023/US-024 make import() and ESM work natively, US-026 makes streaming stdin work, US-022 makes isTTY/setRawMode work. After those land, this is ONLY a test rewrite: remove sandboxSkip probes, load Pi in-VM via kernel.openShell(). The ONLY acceptable skip is skipUnlessPiInstalled. If import() or stdin streaming fails, that means the dependency stories are not done — go back and fix those."
+      "passes": true,
+      "notes": "Fixed PTY icrnl (CR→NL conversion) not being disabled by setRawMode — added icrnl to LineDisciplineConfig and set it in the onPtySetRawMode callback. Added _notifyProcessExit bridge handler to flush pending timer promises and stdin on process.exit(). Registered _ptySetRawMode and _notifyProcessExit in V8 SYNC_BRIDGE_FNS. Exit tests use grace-period pattern due to V8 event loop pending _stdinRead promises."
     },
     {
       "id": "US-029",

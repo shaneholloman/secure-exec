@@ -98,6 +98,10 @@
 - Bridge fetch must normalize Headers instances to plain objects before JSON.stringify — SDK passes Headers, JSON.stringify(Headers) = {}
 - Response body needs Symbol.asyncIterator with Promise.resolve-based reader for SDK SSE parsing — async generators create extra microtask overhead
 - V8 event loop needs post-loop microtask drain (session.rs) for async generator chains across loaded ESM modules
+- setRawMode(true) must disable icrnl on the PTY line discipline — without it, CR (0x0d) is converted to NL (0x0a), breaking TUI submit detection (Pi expects \r for Enter)
+- SYNC_BRIDGE_FNS in native/v8-runtime/src/session.rs must list every bridge function that JS code calls via applySync — missing entries make typeof check undefined
+- process.exit() must call _notifyProcessExit bridge to flush pending host timers and stdin; _timers.clear() alone doesn't resolve Rust-side pending promises
+- V8 event loop pending _stdinRead keeps the loop alive after process.exit — need host-side onStdinEnd() call to resolve it
 - SDK uses .mjs files in V8 sandbox — patches to .js files won't be loaded; the _loadFile handler traces must check .mjs paths
 - V8 crate v130.0.7 has a SIGSEGV (NULL deref at 0x0) bug triggered by Pi interactive mode's large module graph — ~1594 modules loaded before crash in dynamic_import_callback cache resolution path
 - V8 SIGSEGV debugging: use SA_SIGINFO signal handler with libc::backtrace_symbols_fd; set SECURE_EXEC_DEBUG_EXEC=1 for host-side exec result logging; copy local build to node_modules/.pnpm path for testing
@@ -1114,4 +1118,30 @@ Started: Sat Mar 21 02:49:43 AM PDT 2026
   - V8 process stderr is NOT captured by vitest — use file-based logging (SECURE_EXEC_V8_DIAG_FILE) for crash diagnostics
   - Explicit microtask policy starves the V8 event loop (timer callbacks don't chain properly) — keep auto policy
   - The bridge's Intl.Segmenter polyfill only covers fresh isolates; snapshot-restored contexts need the polyfill re-applied in user code or postRestoreScript
+---
+
+## 2026-03-22 - US-028
+- Pi interactive tests (in-VM PTY) — all 9 tests passing, zero skips
+- Root cause of prompt submission failure: setRawMode(true) did not disable icrnl (CR→NL conversion) on PTY line discipline, so \r was converted to \n and Pi treated it as "newLine" instead of "submit"
+- Fix: Added icrnl field to LineDisciplineConfig and KernelInterface.ptySetDiscipline type, handle it in PtyManager.setDiscipline(), set icrnl: !mode in onPtySetRawMode callback
+- Added _ptySetRawMode and _notifyProcessExit to Rust SYNC_BRIDGE_FNS (native/v8-runtime/src/session.rs)
+- Added _notifyProcessExit bridge handler to flush pending timer promises and close stdin on process.exit()
+- process.exit() now clears _timers map and calls _notifyProcessExit before throwing ProcessExitError
+- Exit tests use grace-period pattern (5s timeout + force-kill fallback) for V8 event loop drain limitation
+- Files changed:
+  - native/v8-runtime/src/session.rs (added bridge fn names)
+  - packages/core/src/kernel/pty.ts (icrnl in LineDisciplineConfig + setDiscipline)
+  - packages/core/src/kernel/types.ts (icrnl in ptySetDiscipline type)
+  - packages/nodejs/src/bridge-contract.ts (notifyProcessExit key)
+  - packages/nodejs/src/bridge-handlers.ts (TimerBridgeResult, flushPendingTimers)
+  - packages/nodejs/src/bridge/process.ts (_notifyProcessExit declaration + process.exit changes)
+  - packages/nodejs/src/execution-driver.ts (_notifyProcessExit handler assembly)
+  - packages/nodejs/src/kernel-runtime.ts (icrnl: !mode in setRawMode callback)
+  - packages/secure-exec/tests/cli-tools/pi-interactive.test.ts (exit test patterns)
+- **Learnings for future iterations:**
+  - PTY icrnl default is true — setRawMode MUST disable it (CR→NL conversion breaks TUI input handling)
+  - V8 event loop won't drain if pending _stdinRead async bridge promise is never resolved — need explicit stdin close mechanism
+  - process.exit() in timer callbacks is silently caught — need _notifyProcessExit to flush host-side pending promises
+  - SYNC_BRIDGE_FNS array in session.rs must include every bridge function used as a V8 global — missing entries make the function undefined
+  - After cargo build --release, must copy binary to node_modules (rm old + cp new) due to "text file busy"
 ---
