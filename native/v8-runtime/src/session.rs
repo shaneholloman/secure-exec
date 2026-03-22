@@ -119,7 +119,7 @@ impl SessionManager {
         };
         let join_handle = thread::Builder::new()
             .name(format!("session-{}", name_prefix))
-            .stack_size(32 * 1024 * 1024) // 32 MiB — V8 with large module graphs needs extra stack
+            .stack_size(32 * 1024 * 1024) // 32 MiB — V8 microtask checkpoints with large module graphs need extra stack
             .spawn(move || {
                 session_thread(
                     heap_limit_mb,
@@ -512,12 +512,19 @@ fn session_thread(
                             )
                         };
 
-                        // Re-initialize module resolve state for the event loop.
-                        // execute_script/execute_module clear MODULE_RESOLVE_STATE
-                        // on return, but dynamic import() calls during the event loop
-                        // (e.g. from timer callbacks) need it to resolve modules.
+                        // Update module resolve state for the event loop.
+                        // execute_module preserves the module cache (names + compiled
+                        // modules) on success so the event loop can reuse them for
+                        // dynamic import() in timer callbacks. We update the bridge_ctx
+                        // pointer (it points to the stack-local bridge_ctx which is still
+                        // valid). For execute_script (CJS), state was cleared on return,
+                        // so we initialize fresh if needed.
                         execution::MODULE_RESOLVE_STATE.with(|cell| {
-                            if cell.borrow().is_none() {
+                            if cell.borrow().is_some() {
+                                // Preserve module cache, just update bridge pointer
+                                execution::update_bridge_ctx(&bridge_ctx as *const _);
+                            } else {
+                                // CJS path or error path — initialize fresh
                                 *cell.borrow_mut() = Some(execution::ModuleResolveState {
                                     bridge_ctx: &bridge_ctx as *const _,
                                     module_names: std::collections::HashMap::new(),
@@ -527,6 +534,12 @@ fn session_thread(
                         });
 
                         // Run event loop if there are pending async promises
+                        // Keep auto microtask policy during event loop.
+                        // The SIGSEGV that previously occurred during auto microtask
+                        // processing in resolver.resolve() was caused by V8's native
+                        // Intl.Segmenter crashing (JSSegments::Create NULL deref in ICU).
+                        // With Intl.Segmenter polyfilled in JS, auto policy works correctly.
+
                         let mut terminated = if pending.len() > 0 {
                             let scope = &mut v8::HandleScope::new(iso);
                             let ctx = v8::Local::new(scope, &exec_context);
@@ -575,6 +588,7 @@ fn session_thread(
                                 }
                             }
                         }
+
 
                         // Clear module resolve state after event loop completes
                         execution::MODULE_RESOLVE_STATE.with(|cell| {

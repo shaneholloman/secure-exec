@@ -586,6 +586,17 @@ fn clear_module_state() {
     });
 }
 
+/// Update the bridge_ctx pointer in module resolve state without clearing the
+/// module cache. Used to preserve compiled modules across the event loop while
+/// updating the bridge context for the new session.
+pub(crate) fn update_bridge_ctx(bridge_ctx: *const crate::host_call::BridgeCallContext) {
+    MODULE_RESOLVE_STATE.with(|cell| {
+        if let Some(state) = cell.borrow_mut().as_mut() {
+            state.bridge_ctx = bridge_ctx;
+        }
+    });
+}
+
 /// Register the dynamic import callback on the isolate.
 /// Must be called after isolate creation (not captured in snapshots).
 pub fn enable_dynamic_import(isolate: &mut v8::OwnedIsolate) {
@@ -1045,7 +1056,10 @@ pub fn execute_module(
             }
         };
 
-        clear_module_state();
+        // NOTE: Do NOT clear module state on success path.
+        // The event loop re-uses the module cache for dynamic import()
+        // in timer callbacks. The session clears it after the event loop ends.
+        // Error paths above still clear on failure.
         (0, Some(exports_bytes), None)
     }
 }

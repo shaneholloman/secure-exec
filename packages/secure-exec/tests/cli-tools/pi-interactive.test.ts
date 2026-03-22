@@ -236,6 +236,42 @@ function buildPiInteractiveCode(): string {
 
   return `export {};
 
+// Polyfill Intl.Segmenter — V8 sidecar's native ICU Segmenter crashes
+// (SIGSEGV in JSSegments::Create) with large module graphs. The bridge
+// polyfill covers fresh isolates, but snapshot-restored contexts need
+// this re-application since the snapshot was built without the polyfill.
+if (typeof Intl !== 'undefined') {
+  function SegmenterPolyfill(locale, options) {
+    this._gran = (options && options.granularity) || 'grapheme';
+  }
+  SegmenterPolyfill.prototype.segment = function(input) {
+    var str = String(input);
+    var gran = this._gran;
+    var result = [];
+    if (gran === 'grapheme') {
+      var idx = 0;
+      for (var ch of str) {
+        result.push({ segment: ch, index: idx, input: str });
+        idx += ch.length;
+      }
+    } else if (gran === 'word') {
+      var re = /[\\w]+|[^\\w]+/g;
+      var m;
+      while ((m = re.exec(str)) !== null) {
+        result.push({ segment: m[0], index: m.index, input: str, isWordLike: /[a-zA-Z0-9]/.test(m[0]) });
+      }
+    } else {
+      result.push({ segment: str, index: 0, input: str });
+    }
+    result.containing = function(idx) { return result.find(function(s) { return idx >= s.index && idx < s.index + s.segment.length; }); };
+    result[Symbol.iterator] = function() { var i = 0; return { next: function() { return i < result.length ? { value: result[i++], done: false } : { done: true }; } }; };
+    return result;
+  };
+  SegmenterPolyfill.prototype.resolvedOptions = function() { return { locale: 'en', granularity: this._gran }; };
+  SegmenterPolyfill.supportedLocalesOf = function() { return ['en']; };
+  Intl.Segmenter = SegmenterPolyfill;
+}
+
 // Override process.argv for Pi CLI
 process.argv = ['node', 'pi', ${flags.map((f) => JSON.stringify(f)).join(', ')}];
 

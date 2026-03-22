@@ -1402,4 +1402,67 @@ export function setupGlobals(): void {
       cryptoObj.randomUUID = cryptoPolyfill.randomUUID;
     }
   }
+
+  // Intl.Segmenter — V8 sidecar's native ICU Segmenter crashes (SIGSEGV in
+  // JSSegments::Create) when called after loading large module graphs. Polyfill
+  // with a JS implementation that covers grapheme/word/sentence granularity.
+  if (typeof Intl !== "undefined") {
+    const IntlObj = Intl as Record<string, unknown>;
+    function SegmenterPolyfill(
+      this: { _gran: string },
+      _locale?: string,
+      options?: { granularity?: string },
+    ): void {
+      this._gran = (options && options.granularity) || "grapheme";
+    }
+    SegmenterPolyfill.prototype.segment = function (
+      this: { _gran: string },
+      input: unknown,
+    ) {
+      const str = String(input);
+      const gran = this._gran;
+      const result: Array<Record<string, unknown>> = [];
+      if (gran === "grapheme") {
+        let idx = 0;
+        for (const ch of str) {
+          result.push({ segment: ch, index: idx, input: str });
+          idx += ch.length;
+        }
+      } else if (gran === "word") {
+        const re = /[\w]+|[^\w]+/g;
+        let m;
+        while ((m = re.exec(str)) !== null) {
+          result.push({
+            segment: m[0],
+            index: m.index,
+            input: str,
+            isWordLike: /[a-zA-Z0-9]/.test(m[0]),
+          });
+        }
+      } else {
+        result.push({ segment: str, index: 0, input: str });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = result as any;
+      res.containing = (idx: number) =>
+        result.find(
+          (s) =>
+            idx >= (s.index as number) &&
+            idx < (s.index as number) + (s.segment as string).length,
+        );
+      res[Symbol.iterator] = function* () {
+        yield* result;
+      };
+      return res;
+    };
+    SegmenterPolyfill.prototype.resolvedOptions = function (this: {
+      _gran: string;
+    }) {
+      return { locale: "en", granularity: this._gran };
+    };
+    SegmenterPolyfill.supportedLocalesOf = function () {
+      return ["en"];
+    };
+    IntlObj.Segmenter = SegmenterPolyfill;
+  }
 }
