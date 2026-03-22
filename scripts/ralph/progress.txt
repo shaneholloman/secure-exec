@@ -796,3 +796,25 @@ Started: Sat Mar 21 02:49:43 AM PDT 2026
   - import_meta_callback uses MODULE_RESOLVE_STATE thread-local (same as module_resolve_callback) to look up module file paths
   - cargo test SIGSEGV is pre-existing from US-023 — caused by V8 teardown, not import_meta_callback
 ---
+
+## 2026-03-21 18:00 - US-025
+- Removed transformDynamicImport() from loadFileSync handler — V8 handles import() natively via dynamic_import_callback in both CJS and ESM modes
+- Added CJS-to-ESM wrapping in async _loadFile handler using wrapCJSForESMWithModulePath — ensures V8's module system can correctly import CJS files
+- Marked __dynamicImport, _dynamicImport, and transformDynamicImport as browser-only fallbacks with comments in:
+  - packages/core/src/shared/esm-utils.ts
+  - packages/core/src/shared/global-exposure.ts
+  - packages/core/isolate-runtime/src/inject/setup-dynamic-import.ts
+  - packages/nodejs/src/bridge-contract.ts
+  - packages/nodejs/src/bridge-handlers.ts
+- Files changed:
+  - packages/nodejs/src/bridge-handlers.ts (removed transformDynamicImport import/call, added wrapCJSForESMWithModulePath import, updated loadFileSync and loadFile handlers)
+  - packages/core/src/shared/esm-utils.ts (browser-only comment on transformDynamicImport)
+  - packages/core/src/shared/global-exposure.ts (browser-only comments on _dynamicImport, __dynamicImport)
+  - packages/nodejs/src/bridge-contract.ts (browser-only comment on dynamicImport key)
+  - packages/core/isolate-runtime/src/inject/setup-dynamic-import.ts (browser-only comment)
+- **Learnings for future iterations:**
+  - V8's dynamic_import_callback works in BOTH CJS (execute_script) and ESM (execute_module) modes — no JS-side shim needed
+  - When V8's module system loads a CJS file via import(), it must be wrapped as ESM (wrapCJSForESMWithModulePath) because V8 parses all module loads as ESM
+  - The __dynamicImport global is still installed in V8 snapshots but never called — removing it would require a snapshot rebuild
+  - convertEsmToCjs is still needed in loadFileSync for require() of ESM-only packages in CJS exec mode
+---

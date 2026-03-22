@@ -417,7 +417,7 @@
         "pnpm --filter secure-exec exec vitest run passes"
       ],
       "priority": 25,
-      "passes": false,
+      "passes": true,
       "notes": "Cleanup story after US-023 and US-024. The regex hacks to remove/bypass: (1) transformDynamicImport in esm-utils.ts:22 — replaces import( with __dynamicImport( via regex, breaks minified code, (2) convertEsmToCjs in bridge-handlers.ts:968 — 100-line regex ESM→CJS converter, breaks on edge cases, (3) __dynamicImport shim in global-exposure.ts:337 and bridge-contract.ts:24 — no longer needed when V8 handles import() natively. The browser worker (packages/browser/src/worker.ts) may still need these hacks since it doesn't use the V8 sidecar — leave those paths intact but clearly mark them as browser-only fallbacks."
     },
     {
