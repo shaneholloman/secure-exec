@@ -36,36 +36,59 @@ KernelSocket {
   domain: AF_INET | AF_INET6 | AF_UNIX
   type: SOCK_STREAM | SOCK_DGRAM
   protocol: number
-  state: 'created' | 'bound' | 'listening' | 'connected' | 'closed'
+  state: 'created' | 'bound' | 'listening' | 'connected' | 'read-closed' | 'write-closed' | 'closed'
+  nonBlocking: boolean  // O_NONBLOCK
   localAddr?: { host: string, port: number } | { path: string }
   remoteAddr?: { host: string, port: number } | { path: string }
   options: Map<number, number>  // SO_REUSEADDR, TCP_NODELAY, etc.
   pid: number  // owning process
-  readBuffer: Uint8Array[]  // incoming data queue
-  readWaiters: Array<(data: Uint8Array) => void>
+  readBuffer: Uint8Array[]  // incoming data queue (SOCK_DGRAM: each element = one datagram)
+  readWaiters: WaitHandle[]  // unified wait/wake (see K-10)
   writeBuffer: Uint8Array[]  // outgoing data queue (for non-blocking)
   backlog: KernelSocket[]  // pending connections (listening sockets only)
-  acceptWaiters: Array<(socket: KernelSocket) => void>
+  acceptWaiters: WaitHandle[]
 }
 
 SocketTable {
   private sockets: Map<number, KernelSocket>
   private nextSocketId: number
-  private listeners: Map<string, KernelSocket>  // "host:port" → listening socket
+  private listeners: Map<string, KernelSocket>  // "host:port" OR "/vfs/path" → listening socket
 
   create(domain, type, protocol, pid): number  // returns socket ID
+  socketpair(domain, type, protocol, pid): [number, number]  // returns two connected socket IDs
   bind(socketId, addr): void
   listen(socketId, backlog): void
   accept(socketId): KernelSocket | null  // null = EAGAIN
   connect(socketId, addr): void  // in-kernel for loopback, host adapter for external
-  send(socketId, data, flags): number  // bytes sent
-  recv(socketId, maxBytes, flags): Uint8Array | null
+  shutdown(socketId, how: 'read' | 'write' | 'both'): void  // half-close
+  send(socketId, data, flags): number  // bytes sent (SOCK_STREAM)
+  sendTo(socketId, data, flags, destAddr): number  // bytes sent (SOCK_DGRAM)
+  recv(socketId, maxBytes, flags): Uint8Array | null  // SOCK_STREAM
+  recvFrom(socketId, maxBytes, flags): { data: Uint8Array, srcAddr: SockAddr } | null  // SOCK_DGRAM
   close(socketId): void
+  poll(socketId): { readable: boolean, writable: boolean, hangup: boolean }
   setsockopt(socketId, level, optname, optval): void
   getsockopt(socketId, level, optname): number
-  getLocalAddr(socketId): SockAddr
-  getRemoteAddr(socketId): SockAddr
+  getLocalAddr(socketId): SockAddr  // getsockname()
+  getRemoteAddr(socketId): SockAddr  // getpeername()
 }
+
+// Flags for send/recv:
+// MSG_PEEK     — read without consuming from buffer
+// MSG_DONTWAIT — non-blocking for this single call (regardless of O_NONBLOCK)
+// MSG_NOSIGNAL — don't raise SIGPIPE on broken connection
+
+// For SOCK_DGRAM readBuffer: each Uint8Array element is one complete datagram.
+// Message boundaries are preserved — two 100-byte sends produce two 100-byte recvs.
+// For SOCK_STREAM readBuffer: elements may be coalesced or split at arbitrary boundaries.
+// Max UDP datagram size: 65535 bytes. Max receive queue depth: 128 datagrams.
+
+// Wildcard address matching: connect('127.0.0.1', 8080) matches a listener
+// bound to '0.0.0.0:8080'. The listeners map must check both exact and wildcard.
+
+// Error semantics for send() on closed connection: EPIPE (+ SIGPIPE unless MSG_NOSIGNAL).
+// Error semantics for send() on reset connection: ECONNRESET.
+// Error semantics for send() on unconnected SOCK_STREAM: ENOTCONN.
 ```
 
 **Testing:** Standalone test in `packages/core/test/kernel/socket-table.test.ts`:
@@ -257,6 +280,130 @@ Runtimes call kernel DNS before falling through to host adapter.
 - Lookup hit → host adapter NOT called
 - TTL expiry → host adapter called again
 - Flush → all entries cleared
+
+### 2.4 Unified Blocking I/O Wait System (K-10)
+
+Currently each blocking operation (pipe read, socket recv, flock, poll) implements its own wait/wake logic. Add a unified `WaitHandle` primitive in `packages/core/src/kernel/wait.ts`:
+
+```
+WaitHandle {
+  wait(timeoutMs?: number): Promise<void>  // suspends caller until woken or timeout
+  wake(): void  // wakes one waiter
+  wakeAll(): void  // wakes all waiters
+}
+
+WaitQueue {
+  private waiters: WaitHandle[]
+  enqueue(): WaitHandle  // creates and enqueues a new WaitHandle
+  wakeOne(): void
+  wakeAll(): void
+}
+```
+
+All kernel subsystems use `WaitQueue` for blocking:
+- **Pipe read** (buffer empty) → `pipeState.readWaiters.enqueue().wait()`
+- **Pipe write** (buffer full) → `pipeState.writeWaiters.enqueue().wait()`
+- **Socket accept** (no pending connection) → `socket.acceptWaiters.enqueue().wait()`
+- **Socket recv** (no data) → `socket.readWaiters.enqueue().wait()`
+- **flock** (lock held by another process) → `fileLock.waiters.enqueue().wait()`
+- **poll() with timeout -1** → `waitQueue.enqueue().wait()` on each polled FD, race with timeout
+
+**WasmVM integration:** The WasmVM worker thread blocks on `Atomics.wait()` during any syscall. The main thread handler calls `waitQueue.enqueue().wait()` (which is a JS Promise). When the condition is met, `wake()` resolves the Promise, the main thread writes the response to the signal buffer, and `Atomics.notify()` wakes the worker. The existing 30s `RPC_WAIT_TIMEOUT_MS` applies — for indefinite waits (poll timeout -1), the main thread handler loops: wait → timeout → check condition → re-wait.
+
+**Node.js integration:** The Node.js bridge is async. Blocking semantics are implemented via `applySyncPromise` (V8's synchronous Promise resolution). `recv()` returns a Promise that resolves when the WaitHandle is woken. The isolate event loop pumps until the Promise settles.
+
+**Testing:** Standalone test in `packages/core/test/kernel/wait-queue.test.ts`:
+- Create WaitHandle, wake it — verify wait() resolves
+- Create WaitHandle with timeout — verify it times out
+- Multiple waiters, wakeOne — verify only one wakes
+- wakeAll — verify all wake
+- Wait on pipe read with empty buffer — write data — verify read unblocks
+- Wait on flock held by process A — process A unlocks — verify process B unblocks
+
+### 2.5 Inode Layer (K-11)
+
+Add `packages/core/src/kernel/inode-table.ts`:
+
+```
+Inode {
+  ino: number          // unique inode number
+  nlink: number        // hard link count
+  openRefCount: number // number of open FDs referencing this inode
+  mode: number         // file type + permissions (S_IFREG, S_IFDIR, etc.)
+  uid: number
+  gid: number
+  size: number
+  atime: Date
+  mtime: Date
+  ctime: Date
+  birthtime: Date
+}
+
+InodeTable {
+  private inodes: Map<number, Inode>
+  private nextIno: number
+
+  allocate(mode, uid, gid): Inode
+  get(ino: number): Inode | null
+  incrementLinks(ino): void     // hard link created
+  decrementLinks(ino): void     // hard link or directory entry removed
+  incrementOpenRefs(ino): void  // FD opened
+  decrementOpenRefs(ino): void  // FD closed — if nlink=0 and openRefCount=0, delete data
+  shouldDelete(ino): boolean    // nlink=0 && openRefCount=0
+}
+```
+
+VFS nodes reference inodes by `ino` number. Multiple directory entries (hard links) share the same inode. `stat()` returns inode metadata.
+
+**Deferred deletion:** When `unlink()` removes the last directory entry (`nlink → 0`) but FDs are still open (`openRefCount > 0`), the inode and its data persist. The file disappears from directory listings but remains accessible via open FDs. When the last FD is closed (`openRefCount → 0`), the inode and data are deleted. `stat()` on an open FD to an unlinked file returns `nlink: 0`.
+
+**Hard links:** `link(existingPath, newPath)` creates a new directory entry pointing to the same inode. `incrementLinks()` bumps `nlink`. Both paths return the same `ino` from `stat()`.
+
+**Integration with FD table:** `ProcessFDTable.open()` calls `inodeTable.incrementOpenRefs(ino)`. `ProcessFDTable.close()` calls `inodeTable.decrementOpenRefs(ino)` and checks `shouldDelete()`.
+
+**Testing:** Standalone test in `packages/core/test/kernel/inode-table.test.ts`:
+- Allocate inode, verify ino is unique
+- Create hard link — verify nlink increments, both paths return same ino
+- Unlink file with open FD — verify data persists, stat returns nlink=0
+- Close last FD on unlinked file — verify inode and data are deleted
+- stat() on unlinked-but-open file — verify correct metadata
+
+### 2.6 Signal Handler Registry (K-8, expanded)
+
+Expand beyond section 4.8's basic signal delivery to full POSIX sigaction semantics:
+
+```
+SignalHandler {
+  handler: 'default' | 'ignore' | FunctionPointer  // SIG_DFL, SIG_IGN, or user function
+  mask: Set<number>    // signals blocked during handler execution (sa_mask)
+  flags: number        // SA_RESTART, SA_NOCLDSTOP, etc.
+}
+
+ProcessSignalState {
+  handlers: Map<number, SignalHandler>       // signal number → handler
+  blockedSignals: Set<number>               // sigprocmask: currently blocked signals
+  pendingSignals: Map<number, number>       // signal → count (queued while blocked)
+}
+```
+
+**sigaction(signal, handler, mask, flags):** Registers a handler for `signal`. When the signal is delivered:
+1. If handler is `'ignore'` → signal is discarded
+2. If handler is `'default'` → kernel applies default action (SIGTERM→exit, SIGINT→exit, SIGCHLD→ignore, etc.)
+3. If handler is a function pointer → kernel invokes it with `sa_mask` signals temporarily blocked
+
+**SA_RESTART:** If a signal interrupts a blocking syscall (recv, accept, read, wait, poll) and SA_RESTART is set, the syscall is restarted automatically after the handler returns. Without SA_RESTART, the syscall returns EINTR.
+
+**sigprocmask(how, set):** `SIG_BLOCK` adds signals to `blockedSignals`, `SIG_UNBLOCK` removes them, `SIG_SETMASK` replaces. Signals delivered while blocked are queued in `pendingSignals`. When unblocked, pending signals are delivered in order (lowest signal number first, per POSIX).
+
+**Signal coalescing:** Standard signals (1-31) are coalesced — if SIGINT is delivered twice while blocked, only one instance is queued. The `pendingSignals` count is capped at 1 for standard signals.
+
+**Testing:** Standalone test in `packages/core/test/kernel/signal-handlers.test.ts`:
+- Register SIGINT handler, deliver SIGINT — verify handler called instead of default exit
+- SA_RESTART: handler interrupts blocking recv, verify recv restarts
+- No SA_RESTART: handler interrupts blocking recv, verify EINTR returned
+- sigprocmask SIG_BLOCK SIGINT, deliver SIGINT, verify not delivered until SIG_UNBLOCK
+- Two SIGINTs while blocked — verify only one delivered (coalescing)
+- SIG_IGN for SIGCHLD — verify child exit doesn't invoke handler
 
 ---
 
@@ -579,6 +726,8 @@ interface HostSocket {
   write(data: Uint8Array): Promise<void>
   read(): Promise<Uint8Array | null>  // null = EOF
   close(): Promise<void>
+  setOption(level: number, optname: number, optval: number): void  // forward kernel socket options
+  shutdown(how: 'read' | 'write' | 'both'): void  // TCP FIN
 }
 
 interface HostListener {
@@ -605,14 +754,19 @@ All kernel components are tested standalone — no Node.js runtime, no WasmVM, n
 
 ```
 packages/core/test/kernel/
-  socket-table.test.ts        # K-1: Socket lifecycle, state transitions, EMFILE
-  loopback.test.ts            # K-2: In-kernel client↔server routing
+  socket-table.test.ts        # K-1: Socket lifecycle, state transitions, EMFILE, socketpair
+  loopback.test.ts            # K-2: In-kernel client↔server routing, wildcard address matching
   server-socket.test.ts       # K-3: listen/accept, backlog, EADDRINUSE
-  udp-socket.test.ts          # K-4: Datagram send/recv, message boundaries
-  unix-socket.test.ts         # K-5: VFS-path binding, stream + dgram modes
+  udp-socket.test.ts          # K-4: Datagram send/recv, message boundaries, max dgram size
+  unix-socket.test.ts         # K-5: VFS-path binding, stream + dgram modes, socketpair
   network-permissions.test.ts # K-7: Deny-by-default, loopback exemption
+  wait-queue.test.ts          # K-10: Unified wait/wake, pipe blocking, flock blocking
+  inode-table.test.ts         # K-11: Inode alloc, hard links, deferred unlink, refcount
+  signal-handlers.test.ts     # K-8: sigaction, SA_RESTART, sigprocmask, coalescing
   timer-table.test.ts         # Timer lifecycle, budgets, process cleanup
   dns-cache.test.ts           # Cache hit/miss, TTL, flush
+  socket-shutdown.test.ts     # shutdown() half-close, read-closed/write-closed states
+  socket-flags.test.ts        # MSG_PEEK, MSG_DONTWAIT, MSG_NOSIGNAL, O_NONBLOCK
 ```
 
 ### Test pattern:
@@ -691,19 +845,23 @@ it('WasmVM server accepts Node.js client connection', async () => {
 
 ## Migration Order
 
-1. **Socket table + loopback** (K-1, K-2, K-3) — core abstraction, everything depends on it
-2. **Network permissions** (K-7) — must exist before exposing sockets to runtimes
-3. **Node.js HTTP server migration** (N-2, N-3) — highest ROI, unlocks 492 tests
-4. **Node.js net socket migration** (N-4) — needed for HTTP server
-5. **UDP sockets** (K-4) — unlocks 76 dgram tests + WasmVM #17
-6. **Unix domain sockets** (K-5) — unlocks WasmVM #2
-7. **WasmVM syscall wiring** — expose socket table via RPC
-8. **Signal handlers** (K-8) — independent, can parallel with above
-9. **Timer/handle migration** (N-5, N-7, N-8) — lower priority, mainly cleanup
-10. **VFS change notifications** (K-9) — independent, lower priority
-11. **DNS cache** (N-10) — nice-to-have
-12. **FD table unification** (N-1) — important but risky, do after networking stabilizes
-13. **Crypto session cleanup** (N-12) — lowest priority
+1. **Unified wait/wake system** (K-10) — foundation for all blocking I/O
+2. **Inode layer** (K-11) — foundation for correct VFS semantics (deferred unlink, hard links)
+3. **Socket table + loopback + shutdown** (K-1, K-2, K-3) — core networking, depends on K-10 for blocking
+4. **Network permissions** (K-7) — must exist before exposing sockets to runtimes
+5. **FD table unification** (N-1) — sockets need to share the FD number space with files/pipes
+6. **Node.js net socket migration** (N-4) — migrate existing Node.js sockets to kernel
+7. **Node.js HTTP server migration** (N-2, N-3) — highest ROI, unlocks 492 tests
+8. **WasmVM socket migration** — route existing WasmVM sockets through kernel
+9. **WasmVM server sockets** — add bind/listen/accept WASI extensions
+10. **UDP sockets** (K-4) — unlocks 76 dgram tests + WasmVM #17
+11. **Unix domain sockets + socketpair** (K-5) — unlocks WasmVM #2
+12. **Signal handler registry** (K-8) — sigaction, SA_RESTART, sigprocmask, cooperative WASM delivery
+13. **Socket flags** — MSG_PEEK, MSG_DONTWAIT, MSG_NOSIGNAL, expanded setsockopt
+14. **Timer/handle migration** (N-5, N-7, N-8) — cleanup, kernel-enforced budgets
+15. **VFS change notifications** (K-9) — fs.watch support
+16. **DNS cache** (N-10) — shared across runtimes
+17. **Crypto session cleanup** (N-12) — lowest priority
 
 ---
 
