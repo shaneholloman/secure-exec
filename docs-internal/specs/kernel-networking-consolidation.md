@@ -305,23 +305,253 @@ Runtimes call kernel DNS before falling through to host adapter.
 
 ## Part 4: WasmVM Integration
 
-WasmVM already communicates with the kernel via synchronous RPC (`kernel-worker.ts` with Atomics.wait + SharedArrayBuffer). New kernel network APIs are exposed the same way:
+### 4.1 Current State
+
+WasmVM ALREADY has TCP/TLS/DNS/poll support, but it **bypasses the kernel entirely** and goes direct to host:
+
+- **Rust WASI extensions** (`native/wasmvm/crates/wasi-ext/src/lib.rs`): `host_net` module with `net_socket`, `net_connect`, `net_send`, `net_recv`, `net_close`, `net_tls_connect`, `net_getaddrinfo`, `net_setsockopt`, `net_poll`
+- **C sysroot patches** (`native/wasmvm/patches/wasi-libc/0008-sockets.patch`): `host_socket.c` with libc implementations of `socket()`, `connect()`, `send()`, `recv()`, `poll()`, `select()`, `getaddrinfo()`, `setsockopt()`
+- **Kernel worker** (`packages/wasmvm/src/kernel-worker.ts`): `createHostNetImports()` routes network calls through permission check then RPC
+- **Driver** (`packages/wasmvm/src/driver.ts`): `_sockets` Map holds real Node.js `net.Socket` objects, `_nextSocketId` counter, handlers for `netSocket`/`netConnect`/`netSend`/`netRecv`/`netClose`/`netTlsConnect`/`netGetaddrinfo`/`netPoll`
+
+**What's missing in WasmVM:**
+- `bind()` — no WASI extension (WasmVM #1: no server sockets)
+- `listen()` — no WASI extension (WasmVM #1)
+- `accept()` — no WASI extension (WasmVM #1)
+- `sendto()`/`recvfrom()` — no UDP datagram support (WasmVM #17)
+- Unix domain sockets — no AF_UNIX support (WasmVM #2)
+- `setsockopt()` — returns ENOSYS (WasmVM #19)
+- Signal handlers — no `sigaction()` (WasmVM #9)
+- Socket FDs are NOT kernel FDs — stored in driver's `_sockets` Map, separate from kernel FD table
+
+### 4.2 Migration: Route Existing Sockets Through Kernel
+
+The existing WasmVM network path (`kernel-worker.ts` → RPC → `driver.ts` → real host TCP) must be rerouted through the kernel socket table:
+
+**Step 1: Driver stops managing sockets directly**
+
+Current `driver.ts` handlers (`netSocket`, `netConnect`, etc.) manage `_sockets` Map with real Node.js `Socket` objects. After migration:
+- `netSocket` → calls `kernel.socketTable.create()` instead of allocating local ID
+- `netConnect` → calls `kernel.socketTable.connect()` which handles loopback vs external routing
+- `netSend` → calls `kernel.socketTable.send()`
+- `netRecv` → calls `kernel.socketTable.recv()`
+- `netClose` → calls `kernel.socketTable.close()`
+- `netPoll` → calls `kernel.socketTable.poll()` (unified with pipe poll via `kernel.fdPoll()`)
+
+**Step 2: Unify socket FDs with kernel FD table**
+
+Currently WasmVM socket FDs (`_nextSocketId` in driver.ts) and kernel FDs (`localToKernelFd` map in kernel-worker.ts) are separate number spaces. After migration:
+- `kernel.socketTable.create()` returns a kernel FD
+- Kernel worker maps local WASM FD → kernel socket FD (same `localToKernelFd` map used for files/pipes)
+- `poll()` works across file FDs, pipe FDs, and socket FDs in one call
+
+**Step 3: TLS stays in host adapter**
+
+TLS handshake requires OpenSSL — it can't run in-kernel. The kernel socket table delegates TLS to the host adapter:
+- `kernel.socketTable.upgradeTls(socketId, hostname)` → host adapter wraps the host-side socket in TLS
+- From the kernel's perspective, the socket is still a kernel socket — TLS is transparent
+
+### 4.3 New WASI Extensions for Server Sockets
+
+Add to `native/wasmvm/crates/wasi-ext/src/lib.rs` under `host_net`:
+
+```rust
+// New host imports
+fn net_bind(fd: i32, addr_ptr: *const u8, addr_len: u32) -> i32;
+fn net_listen(fd: i32, backlog: i32) -> i32;
+fn net_accept(fd: i32, ret_fd: *mut i32, ret_addr: *mut u8, ret_addr_len: *mut u32) -> i32;
+fn net_sendto(fd: i32, buf: *const u8, len: u32, flags: i32,
+              addr_ptr: *const u8, addr_len: u32, ret_sent: *mut u32) -> i32;
+fn net_recvfrom(fd: i32, buf: *mut u8, len: u32, flags: i32,
+                ret_addr: *mut u8, ret_addr_len: *mut u32, ret_received: *mut u32) -> i32;
+```
+
+Add safe Rust wrappers following the existing pattern (`pub fn bind()`, `pub fn listen()`, etc.).
+
+### 4.4 C Sysroot Patches for Server/UDP/Unix
+
+Extend `native/wasmvm/patches/wasi-libc/0008-sockets.patch` (or create `0009-server-sockets.patch`) to add to `host_socket.c`:
+
+```c
+// Server sockets
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+    char addr_str[256];
+    sockaddr_to_string(addr, addrlen, addr_str, sizeof(addr_str));
+    return __host_net_bind(sockfd, addr_str, strlen(addr_str));
+}
+
+int listen(int sockfd, int backlog) {
+    return __host_net_listen(sockfd, backlog);
+}
+
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+    int new_fd = -1;
+    char remote_addr[256];
+    uint32_t remote_addr_len = sizeof(remote_addr);
+    int err = __host_net_accept(sockfd, &new_fd, remote_addr, &remote_addr_len);
+    if (err != 0) { errno = err; return -1; }
+    if (addr && addrlen) {
+        string_to_sockaddr(remote_addr, remote_addr_len, addr, addrlen);
+    }
+    return new_fd;
+}
+
+// UDP
+ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+               const struct sockaddr *dest_addr, socklen_t addrlen) {
+    char addr_str[256];
+    sockaddr_to_string(dest_addr, addrlen, addr_str, sizeof(addr_str));
+    uint32_t sent = 0;
+    int err = __host_net_sendto(sockfd, buf, len, flags, addr_str, strlen(addr_str), &sent);
+    if (err != 0) { errno = err; return -1; }
+    return (ssize_t)sent;
+}
+
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+                 struct sockaddr *src_addr, socklen_t *addrlen) {
+    char addr_str[256];
+    uint32_t addr_len = sizeof(addr_str), received = 0;
+    int err = __host_net_recvfrom(sockfd, buf, len, flags, addr_str, &addr_len, &received);
+    if (err != 0) { errno = err; return -1; }
+    if (src_addr && addrlen) {
+        string_to_sockaddr(addr_str, addr_len, src_addr, addrlen);
+    }
+    return (ssize_t)received;
+}
+```
+
+Also add AF_UNIX support in `sockaddr_to_string()` / `string_to_sockaddr()` — serialize `struct sockaddr_un` path to/from string.
+
+### 4.5 Kernel Worker Updates
+
+In `packages/wasmvm/src/kernel-worker.ts`, update `createHostNetImports()`:
+
+```typescript
+// Existing imports route through kernel instead of direct RPC:
+net_socket: (domain, type, protocol, ret_fd) => {
+    if (isNetworkBlocked()) return ERRNO_EACCES;
+    const res = rpcCall('kernelSocketCreate', { domain, type, protocol, pid });
+    // ...
+},
+net_connect: (fd, addr_ptr, addr_len) => {
+    const kernelFd = localToKernelFd.get(fd) ?? fd;
+    const res = rpcCall('kernelSocketConnect', { socketId: kernelFd, addr });
+    // ...
+},
+
+// New imports:
+net_bind: (fd, addr_ptr, addr_len) => {
+    if (isNetworkBlocked()) return ERRNO_EACCES;
+    const kernelFd = localToKernelFd.get(fd) ?? fd;
+    const addr = decodeString(addr_ptr, addr_len);
+    const res = rpcCall('kernelSocketBind', { socketId: kernelFd, addr });
+    return res.errno;
+},
+net_listen: (fd, backlog) => {
+    if (isNetworkBlocked()) return ERRNO_EACCES;
+    const kernelFd = localToKernelFd.get(fd) ?? fd;
+    const res = rpcCall('kernelSocketListen', { socketId: kernelFd, backlog });
+    return res.errno;
+},
+net_accept: (fd, ret_fd, ret_addr, ret_addr_len) => {
+    if (isNetworkBlocked()) return ERRNO_EACCES;
+    const kernelFd = localToKernelFd.get(fd) ?? fd;
+    const res = rpcCall('kernelSocketAccept', { socketId: kernelFd });
+    if (res.errno !== 0) return res.errno;
+    // Map new kernel socket FD to local FD
+    const localFd = nextLocalFd++;
+    localToKernelFd.set(localFd, res.intResult);
+    writeI32(ret_fd, localFd);
+    // Write remote address to ret_addr buffer
+    return 0;
+},
+net_sendto: (fd, buf, len, flags, addr_ptr, addr_len, ret_sent) => {
+    // ... permission check, decode, rpcCall('kernelSocketSendTo', ...)
+},
+net_recvfrom: (fd, buf, len, flags, ret_addr, ret_addr_len, ret_received) => {
+    // ... rpcCall('kernelSocketRecvFrom', ...), blocks via Atomics.wait
+},
+```
+
+### 4.6 Driver Updates
+
+In `packages/wasmvm/src/driver.ts`, replace socket handlers with kernel delegation:
+
+```typescript
+// Remove: _sockets Map, _nextSocketId counter
+// Replace handlers with kernel calls:
+
+case 'kernelSocketCreate':
+    return kernel.socketTable.create(args.domain, args.type, args.protocol, args.pid);
+case 'kernelSocketBind':
+    return kernel.socketTable.bind(args.socketId, parseAddr(args.addr));
+case 'kernelSocketListen':
+    return kernel.socketTable.listen(args.socketId, args.backlog);
+case 'kernelSocketAccept':
+    return kernel.socketTable.accept(args.socketId);  // blocks until connection or EAGAIN
+case 'kernelSocketConnect':
+    return kernel.socketTable.connect(args.socketId, parseAddr(args.addr));
+case 'kernelSocketSendTo':
+    return kernel.socketTable.sendTo(args.socketId, args.data, args.flags, parseAddr(args.addr));
+case 'kernelSocketRecvFrom':
+    return kernel.socketTable.recvFrom(args.socketId, args.maxBytes, args.flags);
+```
+
+### 4.7 Blocking Semantics
+
+WasmVM uses `Atomics.wait()` to block the worker thread during syscalls. For blocking socket operations:
+
+- **`accept()`**: If no pending connection, the main thread handler waits for a kernel socket event (connection arrival) before responding. The worker thread stays blocked on `Atomics.wait()`. Timeout: 30s (existing `RPC_WAIT_TIMEOUT_MS`).
+- **`recv()`**: If no data in kernel buffer, main thread waits for data or EOF. Same blocking pattern.
+- **`connect()` to external**: Main thread creates host TCP connection, waits for connect event, then responds.
+- **`connect()` to loopback**: Kernel instantly connects via in-kernel routing — no host wait.
+- **Non-blocking mode**: If `O_NONBLOCK` is set on the socket, kernel returns `EAGAIN` immediately instead of blocking. The WASM program uses `poll()` to wait for readiness.
+
+### 4.8 Signal Handler Delivery
+
+WASM cannot be interrupted mid-execution. Signals must be delivered cooperatively:
+
+1. **Registration**: Add `net_sigaction` WASI extension. WASM program calls `sigaction(SIGINT, handler, NULL)`. Kernel worker stores handler function pointer + signal mask in kernel process table entry.
+
+2. **Delivery**: When kernel delivers a signal to a WasmVM process:
+   - Kernel sets a `pendingSignals` bitmask on the process entry
+   - At next syscall boundary (any `rpcCall` from worker), kernel worker checks `pendingSignals`
+   - If signal pending and handler registered: worker invokes the WASM handler function via `instance.exports.__wasi_signal_trampoline(signum)` before returning from the syscall
+   - If no handler: default behavior (SIGTERM → exit, SIGINT → exit, etc.)
+
+3. **Trampoline**: The C sysroot patch adds a `__wasi_signal_trampoline` export that dispatches to the registered `sigaction` handler. This is called from the JS worker side when a signal is pending.
+
+4. **Limitations**:
+   - Signals only delivered at syscall boundaries — long-running compute without syscalls won't see signals (WasmVM #10, fundamental WASM limitation)
+   - `SIGKILL` always terminates immediately (kernel-enforced, no handler invocation)
+   - `SIGSTOP`/`SIGCONT` handled by kernel process table, not user handlers
+
+### 4.9 WasmVM-Specific Tests
+
+Add to existing test files:
 
 ```
-// In kernel-worker.ts, add syscall handlers:
-case 'sock_open':    return kernel.socketTable.create(domain, type, protocol, pid);
-case 'sock_bind':    return kernel.socketTable.bind(socketId, addr);
-case 'sock_listen':  return kernel.socketTable.listen(socketId, backlog);
-case 'sock_accept':  return kernel.socketTable.accept(socketId);
-case 'sock_connect': return kernel.socketTable.connect(socketId, addr);
-case 'sock_send':    return kernel.socketTable.send(socketId, data, flags);
-case 'sock_recv':    return kernel.socketTable.recv(socketId, maxBytes, flags);
-case 'sock_close':   return kernel.socketTable.close(socketId);
-case 'sock_setopt':  return kernel.socketTable.setsockopt(socketId, level, opt, val);
-case 'sock_getopt':  return kernel.socketTable.getsockopt(socketId, level, opt);
+packages/wasmvm/test/
+  net-socket.test.ts          # UPDATE: migrate existing tests to use kernel sockets
+  net-server.test.ts          # NEW: bind/listen/accept, loopback server
+  net-udp.test.ts             # NEW: UDP send/recv, message boundaries
+  net-unix.test.ts            # NEW: Unix domain sockets via VFS paths
+  net-cross-runtime.test.ts   # NEW: WasmVM server ↔ Node.js client and vice versa
+  signal-handler.test.ts      # NEW: sigaction registration, cooperative delivery
 ```
 
-WasmVM WASI extensions (`native/wasmvm/crates/wasi-ext/src/lib.rs`) call these via the existing host import mechanism. The C sysroot patches route `socket()`, `bind()`, `listen()`, `accept()`, `connect()`, `send()`, `recv()`, `close()`, `setsockopt()`, `getsockopt()` through these host imports.
+**C test programs** (compiled to WASM):
+
+```
+native/wasmvm/c/programs/
+  tcp_server.c        # bind → listen → accept → recv → send → close
+  tcp_client.c        # socket → connect → send → recv → close
+  udp_echo.c          # socket(SOCK_DGRAM) → bind → recvfrom → sendto
+  unix_socket.c       # socket(AF_UNIX) → bind → listen → accept
+  signal_handler.c    # sigaction(SIGINT, handler) → busy loop → verify handler called
+```
+
+These programs are built via `native/wasmvm/c/Makefile` (add to `PATCHED_PROGRAMS` since they use `host_net` imports) and tested via the WasmVM driver in vitest.
 
 ---
 
@@ -472,3 +702,77 @@ it('WasmVM server accepts Node.js client connection', async () => {
 11. **DNS cache** (N-10) — nice-to-have
 12. **FD table unification** (N-1) — important but risky, do after networking stabilizes
 13. **Crypto session cleanup** (N-12) — lowest priority
+
+---
+
+## Part 7: Proofing
+
+After the kernel networking consolidation is implemented, a full audit must be performed before the work is considered complete.
+
+### 7.1 Implementation Review
+
+An adversarial review agent must verify:
+
+1. **Kernel completeness**: Every socket operation (create, bind, listen, accept, connect, send, recv, sendto, recvfrom, close, poll, setsockopt, getsockopt) works in the kernel standalone tests without any runtime attached.
+
+2. **Node.js migration completeness**: No networking code remains in the Node.js bridge that bypasses the kernel. Specifically verify:
+   - `packages/nodejs/src/driver.ts` has no `servers` Map, no `ownedServerPorts` Set, no `netSockets` Map, no `upgradeSockets` Map
+   - `packages/nodejs/src/bridge/network.ts` has no `serverRequestListeners` Map, no `activeNetSockets` Map
+   - `packages/nodejs/src/bridge-handlers.ts` has no socket Maps
+   - All `http.createServer()` calls route through `kernel.socketTable.listen()`
+   - All `net.connect()` calls route through `kernel.socketTable.connect()`
+   - SSRF validation is in the kernel, not the host adapter
+
+3. **WasmVM migration completeness**: No networking code remains in the WasmVM driver that bypasses the kernel. Specifically verify:
+   - `packages/wasmvm/src/driver.ts` has no `_sockets` Map, no `_nextSocketId` counter
+   - All `netSocket`/`netConnect`/`netSend`/`netRecv`/`netClose` handlers delegate to kernel
+   - New handlers exist for `kernelSocketBind`, `kernelSocketListen`, `kernelSocketAccept`, `kernelSocketSendTo`, `kernelSocketRecvFrom`
+   - Socket FDs are unified with kernel FD table (no separate number space)
+   - `net_bind`, `net_listen`, `net_accept`, `net_sendto`, `net_recvfrom` WASI extensions exist in `lib.rs`
+   - C sysroot patches exist for `bind()`, `listen()`, `accept()`, `sendto()`, `recvfrom()`
+   - `setsockopt()` no longer returns ENOSYS for supported options
+
+4. **Loopback routing**: Verify that a server in one runtime can accept connections from another runtime without any real TCP:
+   - Node.js `http.createServer()` on port 8080 → WasmVM `curl http://localhost:8080` works
+   - WasmVM `tcp_server` on port 9090 → Node.js `net.connect(9090)` works
+   - Neither connection touches the host network stack
+
+5. **Permission enforcement**: Verify deny-by-default for all socket operations through the kernel, for both runtimes.
+
+6. **Signal delivery**: Verify WasmVM signal handlers fire at syscall boundaries for SIGINT, SIGTERM, SIGUSR1.
+
+7. **Resource cleanup**: Verify all sockets, timers, and handles are cleaned up when a process exits, for both runtimes.
+
+### 7.2 Conformance Re-test
+
+After kernel migration:
+
+1. Run the full Node.js conformance suite (`packages/secure-exec/tests/node-conformance/runner.test.ts`)
+2. Run the full WasmVM test suite (`packages/wasmvm/test/`)
+3. Run the full POSIX conformance suite if socket-related os-tests exist
+4. Run the project-matrix suite (`packages/secure-exec/tests/projects/`)
+
+### 7.3 Expectations Update
+
+Tests that were blocked by networking gaps should be re-tested and reclassified:
+
+1. Re-run all 492 FIX-01 (HTTP server) tests — remove expectations for tests that now pass
+2. Re-run all 76 dgram tests — remove expectations for tests that now pass
+3. Re-run https/tls/net/http2 glob tests — reclassify from `unsupported-module` to specific failure reasons
+4. Update `docs-internal/nodejs-compat-roadmap.md` with new pass counts
+5. Regenerate conformance report (`scripts/generate-report.ts`)
+
+### 7.4 PRD Update via Ralph
+
+After the review, any remaining gaps, regressions, or incomplete items must be captured as new stories in `scripts/ralph/prd.json`:
+
+1. Load the Ralph skill (`/ralph`)
+2. For each gap found during proofing:
+   - Create a new user story with specific acceptance criteria
+   - Include the exact test names that are still failing
+   - Reference the kernel component that needs fixing
+3. Stories should be right-sized for one Ralph iteration (one context window)
+4. Set priorities sequentially after existing stories
+5. Ralph then executes the remaining stories autonomously until all pass
+
+This ensures no gaps are left undocumented and the work converges to completion through automated iteration.
