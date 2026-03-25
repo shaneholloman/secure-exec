@@ -323,7 +323,9 @@
         }
 
         if (name === 'crypto') {
-          var _runtimeRequire = typeof require === 'function' ? require : globalThis.require;
+          // Avoid bare `require` here so built dist bundles don't rewrite it to
+          // an ESM helper that throws before the sandbox installs globalThis.require.
+          var _runtimeRequire = globalThis.require;
           var _streamModule = _runtimeRequire && _runtimeRequire('stream');
           var _utilModule = _runtimeRequire && _runtimeRequire('util');
           var _Transform = _streamModule && _streamModule.Transform;

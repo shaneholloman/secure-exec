@@ -47,6 +47,8 @@ import {
 	HOST_BRIDGE_GLOBAL_KEYS,
 } from "./bridge-contract.js";
 import {
+	AF_INET,
+	SOCK_STREAM,
 	mkdir,
 	FDTableManager,
 	O_RDONLY,
@@ -1881,9 +1883,6 @@ function buildKernelSocketBridgeHandlers(
 	socketTable: import("@secure-exec/core").SocketTable,
 	pid: number,
 ): NetSocketBridgeResult {
-	const {
-		AF_INET, SOCK_STREAM,
-	} = require("@secure-exec/core") as typeof import("@secure-exec/core");
 	const handlers: BridgeHandlers = {};
 	const K = HOST_BRIDGE_GLOBAL_KEYS;
 
@@ -3365,10 +3364,6 @@ export function buildNetworkBridgeHandlers(deps: NetworkBridgeDeps): NetworkBrid
 
 		return (async () => {
 			try {
-				const {
-					AF_INET, SOCK_STREAM,
-				} = require("@secure-exec/core") as typeof import("@secure-exec/core");
-
 				const host = normalizeLoopbackHostname(options.hostname);
 				debugHttpBridge("listen start", options.serverId, host, options.port ?? 0);
 				const listenSocketId = socketTable.create(AF_INET, SOCK_STREAM, 0, pid);

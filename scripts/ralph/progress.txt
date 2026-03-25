@@ -6,6 +6,7 @@
 - When the session cipher bridge is unavailable, crypto constructor-time validation still has to happen eagerly through the one-shot host bridge; otherwise Node conformance misses `createCipheriv()`/`createDecipheriv()` throw-on-construction cases
 - `bridge-initial-globals.ts` intentionally removes `SharedArrayBuffer`; when vendored conformance files hard-require it, classify the expectation as a `security-constraint` instead of treating the failure as a crypto implementation bug
 - When a crypto/node-conformance expectation reason looks stale, temporarily remove just that entry and rerun the exact vendored file filter; the runner prints the real sandbox stderr, which is often a missing fixture or error-shape mismatch rather than the older bridge-gap guess
+- Host-side ESM packages in `packages/nodejs/src/` cannot use bare `require(...)`; standalone `dist/` execution runs them as real ESM, so bridge helpers must use static imports or `createRequire()`
 - Conformance tests live in packages/secure-exec/tests/node-conformance/ — vendored Node.js v22.14.0 test/parallel/
 - Runner is packages/secure-exec/tests/node-conformance/runner.test.ts — run with: pnpm vitest run packages/secure-exec/tests/node-conformance/runner.test.ts
 - Expectations are in packages/secure-exec/tests/node-conformance/expectations.json — each entry has expected (pass/fail/skip), reason, category
@@ -93,4 +94,13 @@
   - Several remaining crypto failures are currently fixture-VFS gaps (`/test/fixtures/*.pem`, `.crt`, `.spkac`), so expectation reasons should name the missing fixture path instead of blaming a generic bridge gap.
   - The vendored runner is the quickest way to verify expectation accuracy: removing one entry and rerunning the exact file gives a concrete stderr snippet that can be copied into the reason.
   - Module-overlay drift still shows up in conformance as missing APIs like `require('crypto').randomUUID` and `crypto.hkdf`, even when related globals or bridge handlers exist elsewhere.
+---
+## [2026-03-25 04:26 PDT] - US-008
+- Implemented the standalone bootstrap fix by removing the last dist-broken bare `require` paths from both the isolate bootstrap and the host bridge handlers, so `NodeRuntime.exec()` and kernel-managed `node` processes work from the built `packages/secure-exec/dist/index.js` entrypoint.
+- Added a dist-based regression smoke test that spawns a real host `node --input-type=module` process, verifies `runtime.exec()` emits `hello` and supports `require("node:fs")`, and verifies `kernel.spawn("node", ["-e", "console.log(1)"])` captures stdout.
+- Files changed: `packages/core/isolate-runtime/src/inject/require-setup.ts`, `packages/core/src/generated/isolate-runtime.ts`, `packages/nodejs/src/bridge-handlers.ts`, `packages/secure-exec/tests/runtime-driver/node/standalone-dist-smoke.test.ts`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Standalone `dist/` verification has to exercise the built package from a real host `node` process; vitest-importing source files can hide ESM-only failures in host bridge code.
+  - `packages/nodejs/src/bridge-handlers.ts` runs on the host as ESM, so any leftover `require("@secure-exec/core")` calls will only fail once the published-style `dist/` path is used.
+  - When a spawned verification script only needs to report pass/fail state, explicitly flushing stdout and exiting keeps the smoke test focused on bootstrap behavior instead of shared-runtime process lifetime.
 ---

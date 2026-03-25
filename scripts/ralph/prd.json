@@ -155,7 +155,7 @@
         "Typecheck passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "RELEASE BLOCKER. The bridge IIFE that injects CJS globals crashes during bootstrap when run outside vitest. Even `1+1` fails because the bootstrap itself references require. The vitest transform pipeline does something (likely TypeScript path resolution or module format handling) that makes it work. Check packages/core/src/generated/isolate-runtime.ts and how it's loaded by the runtime driver."
     },
     {
