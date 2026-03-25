@@ -119,7 +119,7 @@
         "Typecheck passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "4 Cipher/Decipher streaming tests + ~18 error code tests. Hash/Cipher objects need to extend Transform. Error validation needs ERR_* codes instead of plain TypeError."
     },
     {

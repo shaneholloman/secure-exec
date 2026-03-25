@@ -186,6 +186,38 @@ export function runNodeCryptoSuite(context: NodeSuiteContext): void {
 		expect(exports.endType).toBe("function");
 	});
 
+	it("Hash is a Transform stream and supports pipe() output", async () => {
+		const runtime = await context.createRuntime();
+		const result = await runtime.run(`
+			const crypto = require('crypto');
+			const stream = require('stream');
+			module.exports = await new Promise((resolve, reject) => {
+				const src = new stream.PassThrough();
+				const hash = crypto.Hash('sha256');
+				const chunks = [];
+				hash.setEncoding('hex');
+				hash.on('data', (chunk) => chunks.push(chunk));
+				hash.on('error', reject);
+				hash.on('finish', () => {
+					resolve({
+						isTransform: hash instanceof stream.Transform,
+						digest: chunks.join(''),
+						cachedDigest: hash.digest('hex'),
+					});
+				});
+				src.pipe(hash);
+				src.end('hello');
+			});
+		`);
+		expect(result.code).toBe(0);
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.exports).toEqual({
+			isTransform: true,
+			digest: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+			cachedDigest: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+		});
+	});
+
 	it("createHash handles binary Buffer input", async () => {
 		const runtime = await context.createRuntime();
 		const result = await runtime.run(`
@@ -680,6 +712,74 @@ export function runNodeCryptoSuite(context: NodeSuiteContext): void {
 		expect((result.exports as any).encryptedLength).toBeGreaterThan(0);
 	});
 
+	it("Cipheriv and Decipheriv are Transform streams", async () => {
+		const runtime = await context.createRuntime();
+		const result = await runtime.run(`
+			const crypto = require('crypto');
+			const stream = require('stream');
+			const key = Buffer.alloc(24, 1);
+			const iv = Buffer.alloc(8, 2);
+			module.exports = await new Promise((resolve, reject) => {
+				const src = new stream.PassThrough();
+				const cipher = crypto.Cipheriv('des-ede3-cbc', key, iv);
+				const decipher = crypto.Decipheriv('des-ede3-cbc', key, iv);
+				const encrypted = [];
+				const decrypted = [];
+				cipher.on('data', (chunk) => encrypted.push(chunk));
+				cipher.on('error', reject);
+				decipher.on('data', (chunk) => decrypted.push(chunk));
+				decipher.on('error', reject);
+				decipher.on('finish', () => {
+					resolve({
+						cipherTransform: cipher instanceof stream.Transform,
+						decipherTransform: decipher instanceof stream.Transform,
+						encryptedLength: Buffer.concat(encrypted).length,
+						roundTrip: Buffer.concat(decrypted).toString('utf8'),
+					});
+				});
+				src.pipe(cipher).pipe(decipher);
+				src.end('stream me through crypto');
+			});
+		`);
+		expect(result.code).toBe(0);
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.exports).toEqual({
+			cipherTransform: true,
+			decipherTransform: true,
+			encryptedLength: 32,
+			roundTrip: "stream me through crypto",
+		});
+	});
+
+	it("createCipheriv supports CCM authTagLength options", async () => {
+		const runtime = await context.createRuntime();
+		const result = await runtime.run(`
+			const crypto = require('crypto');
+			const key = crypto.randomBytes(24);
+			const nonce = crypto.randomBytes(12);
+			const aad = Buffer.from('secure-exec');
+			const plaintext = Buffer.from('ccm payload');
+			const cipher = crypto.createCipheriv('aes-192-ccm', key, nonce, { authTagLength: 16 });
+			cipher.setAAD(aad, { plaintextLength: plaintext.length });
+			const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+			const tag = cipher.getAuthTag();
+			const decipher = crypto.createDecipheriv('aes-192-ccm', key, nonce, { authTagLength: 16 });
+			decipher.setAuthTag(tag);
+			decipher.setAAD(aad, { plaintextLength: plaintext.length });
+			const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+			module.exports = {
+				tagLength: tag.length,
+				plaintext: decrypted.toString('utf8'),
+			};
+		`);
+		expect(result.code).toBe(0);
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.exports).toEqual({
+			tagLength: 16,
+			plaintext: "ccm payload",
+		});
+	});
+
 	it("randomBytes rejects negative size", async () => {
 		const runtime = await context.createRuntime();
 		const result = await runtime.run(`
@@ -882,6 +982,61 @@ export function runNodeCryptoSuite(context: NodeSuiteContext): void {
 			name: "TypeError",
 			code: "ERR_INVALID_ARG_TYPE",
 			message: 'The "type" argument must be of type string. Received undefined',
+		});
+	});
+
+	it("pbkdf2 validates callback and digest arguments with Node-style errors", async () => {
+		const runtime = await context.createRuntime();
+		const result = await runtime.run(`
+			const crypto = require('crypto');
+			module.exports = (() => {
+				const errors = {};
+				try {
+					crypto.pbkdf2('password', 'salt', 8, 8, 'sha256');
+				} catch (err) {
+					errors.missingCallback = {
+						name: err.name,
+						code: err.code,
+						message: err.message,
+					};
+				}
+				try {
+					crypto.pbkdf2('password', 'salt', 8, 8, () => {});
+				} catch (err) {
+					errors.missingDigest = {
+						name: err.name,
+						code: err.code,
+						message: err.message,
+					};
+				}
+				try {
+					crypto.pbkdf2Sync(1, 'salt', 8, 8, 'sha256');
+				} catch (err) {
+					errors.invalidPassword = {
+						name: err.name,
+						code: err.code,
+					};
+				}
+				return errors;
+			})();
+		`);
+		expect(result.code).toBe(0);
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.exports).toEqual({
+			missingCallback: {
+				name: "TypeError",
+				code: "ERR_INVALID_ARG_TYPE",
+				message: 'The "callback" argument must be of type function. Received undefined',
+			},
+			missingDigest: {
+				name: "TypeError",
+				code: "ERR_INVALID_ARG_TYPE",
+				message: 'The "digest" argument must be of type string. Received undefined',
+			},
+			invalidPassword: {
+				name: "TypeError",
+				code: "ERR_INVALID_ARG_TYPE",
+			},
 		});
 	});
 

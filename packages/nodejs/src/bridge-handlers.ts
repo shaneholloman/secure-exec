@@ -695,14 +695,29 @@ export function buildCryptoBridgeHandlers(): CryptoBridgeResult {
 		keyBase64: unknown,
 		ivBase64: unknown,
 		dataBase64: unknown,
+		optionsJson?: unknown,
 	) => {
 		const key = Buffer.from(String(keyBase64), "base64");
-		const iv = Buffer.from(String(ivBase64), "base64");
+		const iv = ivBase64 === null ? null : Buffer.from(String(ivBase64), "base64");
 		const data = Buffer.from(String(dataBase64), "base64");
-		const cipher = createCipheriv(String(algorithm), key, iv) as any;
+		const options = optionsJson ? JSON.parse(String(optionsJson)) : {};
+		const cipher = createCipheriv(String(algorithm), key, iv, (
+			options.authTagLength !== undefined
+				? { authTagLength: options.authTagLength }
+				: undefined
+		) as any) as any;
+		if (options.validateOnly) {
+			return JSON.stringify({ data: "" });
+		}
+		if (options.aad) {
+			cipher.setAAD(Buffer.from(String(options.aad), "base64"), options.aadOptions);
+		}
+		if (options.autoPadding !== undefined) {
+			cipher.setAutoPadding(Boolean(options.autoPadding));
+		}
 		const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
-		const isGcm = String(algorithm).includes("-gcm");
-		if (isGcm) {
+		const isAead = /-(gcm|ccm)$/i.test(String(algorithm));
+		if (isAead) {
 			return JSON.stringify({
 				data: encrypted.toString("base64"),
 				authTag: cipher.getAuthTag().toString("base64"),
@@ -721,13 +736,26 @@ export function buildCryptoBridgeHandlers(): CryptoBridgeResult {
 		optionsJson: unknown,
 	) => {
 		const key = Buffer.from(String(keyBase64), "base64");
-		const iv = Buffer.from(String(ivBase64), "base64");
+		const iv = ivBase64 === null ? null : Buffer.from(String(ivBase64), "base64");
 		const data = Buffer.from(String(dataBase64), "base64");
 		const options = JSON.parse(String(optionsJson));
-		const decipher = createDecipheriv(String(algorithm), key, iv) as any;
-		const isGcm = String(algorithm).includes("-gcm");
-		if (isGcm && options.authTag) {
+		const decipher = createDecipheriv(String(algorithm), key, iv, (
+			options.authTagLength !== undefined
+				? { authTagLength: options.authTagLength }
+				: undefined
+		) as any) as any;
+		if (options.validateOnly) {
+			return "";
+		}
+		const isAead = /-(gcm|ccm)$/i.test(String(algorithm));
+		if (isAead && options.authTag) {
 			decipher.setAuthTag(Buffer.from(options.authTag, "base64"));
+		}
+		if (options.aad) {
+			decipher.setAAD(Buffer.from(String(options.aad), "base64"), options.aadOptions);
+		}
+		if (options.autoPadding !== undefined) {
+			decipher.setAutoPadding(Boolean(options.autoPadding));
 		}
 		return Buffer.concat([decipher.update(data), decipher.final()]).toString(
 			"base64",
@@ -745,19 +773,27 @@ export function buildCryptoBridgeHandlers(): CryptoBridgeResult {
 	) => {
 		const algo = String(algorithm);
 		const key = Buffer.from(String(keyBase64), "base64");
-		const iv = Buffer.from(String(ivBase64), "base64");
+		const iv = ivBase64 === null ? null : Buffer.from(String(ivBase64), "base64");
 		const options = optionsJson ? JSON.parse(String(optionsJson)) : {};
-		const isGcm = algo.includes("-gcm");
+		const isAead = /-(gcm|ccm)$/i.test(algo);
 
 		let instance: Cipher | Decipher;
 		if (String(mode) === "decipher") {
-			const d = createDecipheriv(algo, key, iv) as any;
-			if (isGcm && options.authTag) {
+			const d = createDecipheriv(algo, key, iv, (
+				options.authTagLength !== undefined
+					? { authTagLength: options.authTagLength }
+					: undefined
+			) as any) as any;
+			if (isAead && options.authTag) {
 				d.setAuthTag(Buffer.from(options.authTag, "base64"));
 			}
 			instance = d;
 		} else {
-			instance = createCipheriv(algo, key, iv) as any;
+			instance = createCipheriv(algo, key, iv, (
+				options.authTagLength !== undefined
+					? { authTagLength: options.authTagLength }
+					: undefined
+			) as any) as any;
 		}
 
 		const sessionId = nextCipherSessionId++;
@@ -786,8 +822,8 @@ export function buildCryptoBridgeHandlers(): CryptoBridgeResult {
 		if (!session) throw new Error(`Cipher session ${id} not found`);
 		cipherSessions.delete(id);
 		const final = session.cipher.final();
-		const isGcm = session.algorithm.includes("-gcm");
-		if (isGcm) {
+		const isAead = /-(gcm|ccm)$/i.test(session.algorithm);
+		if (isAead) {
 			const authTag = (session.cipher as any).getAuthTag?.();
 			return JSON.stringify({
 				data: final.toString("base64"),

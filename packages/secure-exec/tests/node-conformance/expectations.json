@@ -1856,16 +1856,6 @@
       "category": "requires-exec-path",
       "expected": "fail"
     },
-    "test-crypto-authenticated-stream.js": {
-      "reason": "CCM cipher mode requires authTagLength parameter — bridge does not support CCM-specific options (setAAD length, authTagLength)",
-      "category": "implementation-gap",
-      "expected": "fail"
-    },
-    "test-crypto-cipheriv-decipheriv.js": {
-      "reason": "Cipheriv/Decipheriv constructors require 'new' keyword — calling without 'new' throws instead of returning new instance",
-      "category": "implementation-gap",
-      "expected": "fail"
-    },
     "test-crypto-dh-constructor.js": {
       "reason": "DiffieHellman bridge does not handle 'buffer' encoding parameter — generateKeys/computeSecret fail",
       "category": "implementation-gap",
@@ -1878,11 +1868,6 @@
     },
     "test-crypto-dh-errors.js": {
       "reason": "DiffieHellman bridge lacks error validation — does not throw RangeError for invalid key sizes",
-      "category": "implementation-gap",
-      "expected": "fail"
-    },
-    "test-crypto-dh-generate-keys.js": {
-      "reason": "DiffieHellman.generateKeys() returns undefined instead of Buffer — bridge does not return key data",
       "category": "implementation-gap",
       "expected": "fail"
     },
@@ -1916,11 +1901,6 @@
       "category": "unsupported-module",
       "expected": "fail"
     },
-    "test-crypto-ecb.js": {
-      "reason": "uses Blowfish-ECB cipher which is unsupported by OpenSSL 3.x (legacy provider not enabled)",
-      "category": "implementation-gap",
-      "expected": "fail"
-    },
     "test-crypto-ecdh-convert-key.js": {
       "reason": "ECDH.convertKey() error validation missing ERR_INVALID_ARG_TYPE error code on TypeError",
       "category": "implementation-gap",
@@ -1947,12 +1927,12 @@
       "expected": "fail"
     },
     "test-crypto-pbkdf2.js": {
-      "reason": "pbkdf2/pbkdf2Sync error validation missing ERR_INVALID_ARG_TYPE code — TypeError thrown without .code property",
-      "category": "implementation-gap",
+      "reason": "SharedArrayBuffer is intentionally removed by sandbox hardening, so the vendored TypedArray coverage loop aborts before the remaining pbkdf2 assertions run",
+      "category": "security-constraint",
       "expected": "fail"
     },
     "test-crypto-private-decrypt-gh32240.js": {
-      "reason": "publicEncrypt/privateDecrypt bridge returns undefined instead of Buffer — asymmetric encryption result not propagated",
+      "reason": "Sandbox KeyObject.export() does not honor encrypted PEM export options yet, so the encrypted-key failure path is not exercised faithfully",
       "category": "implementation-gap",
       "expected": "fail"
     },
@@ -1973,11 +1953,6 @@
     },
     "test-crypto-sign-verify.js": {
       "reason": "fs.readFileSync encoding argument handled as path component — test reads fixture PEM/cert files which fail to load",
-      "category": "implementation-gap",
-      "expected": "fail"
-    },
-    "test-crypto-stream.js": {
-      "reason": "crypto Hash/Cipher objects do not implement Node.js Stream interface — .pipe() method not available",
       "category": "implementation-gap",
       "expected": "fail"
     },
@@ -3655,11 +3630,6 @@
       "category": "implementation-gap",
       "expected": "fail"
     },
-    "test-crypto-hash-stream-pipe.js": {
-      "reason": "uses crypto/webcrypto APIs not fully bridged in sandbox",
-      "category": "implementation-gap",
-      "expected": "fail"
-    },
     "test-crypto-hash.js": {
       "reason": "tests Node.js-specific error codes (ERR_*) — sandbox polyfills throw plain errors",
       "category": "implementation-gap",
@@ -3672,11 +3642,6 @@
     },
     "test-crypto-hmac.js": {
       "reason": "tests Node.js-specific error codes (ERR_*) — sandbox polyfills throw plain errors",
-      "category": "implementation-gap",
-      "expected": "fail"
-    },
-    "test-crypto-lazy-transform-writable.js": {
-      "reason": "uses crypto/webcrypto APIs not fully bridged in sandbox",
       "category": "implementation-gap",
       "expected": "fail"
     },
@@ -6611,11 +6576,6 @@
       "expected": "pass",
       "reason": "vacuous pass — test self-skips via common.skip() because common.hasCrypto is false",
       "category": "vacuous-skip"
-    },
-    "test-crypto-dh-odd-key.js": {
-      "expected": "fail",
-      "reason": "crypto.getFips is not a function — FIPS detection API not implemented",
-      "category": "implementation-gap"
     },
     "test-crypto-dh-shared.js": {
       "expected": "pass",

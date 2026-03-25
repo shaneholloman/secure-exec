@@ -193,15 +193,15 @@ export type CryptoScryptBridgeRef = BridgeApplySyncRef<
 	string
 >;
 export type CryptoCipherivBridgeRef = BridgeApplySyncRef<
-	[string, string, string, string],
+	[string, string, string | null, string, string?],
 	string
 >;
 export type CryptoDecipherivBridgeRef = BridgeApplySyncRef<
-	[string, string, string, string, string],
+	[string, string, string | null, string, string],
 	string
 >;
 export type CryptoCipherivCreateBridgeRef = BridgeApplySyncRef<
-	[string, string, string, string, string],
+	[string, string, string, string | null, string],
 	number
 >;
 export type CryptoCipherivUpdateBridgeRef = BridgeApplySyncRef<

@@ -120,6 +120,18 @@ Bridge-provided `crypto` Diffie-Hellman and ECDH APIs SHALL delegate to host `no
 - **THEN** the bridge MUST delegate to host `node:crypto.diffieHellman`
 - **AND** the returned shared secret and thrown validation errors MUST preserve Node-compatible behavior
 
+### Requirement: Crypto Stream Wrappers Preserve Transform Semantics And Validation Errors
+Bridge-backed `crypto` hash and cipher wrappers SHALL remain compatible with Node stream semantics and MUST preserve Node-style validation error codes for callback-driven APIs.
+
+#### Scenario: Sandbox hashes or encrypts data through stream piping
+- **WHEN** sandboxed code uses `crypto.Hash`, `crypto.Cipheriv`, or `crypto.Decipheriv` as stream destinations or sources
+- **THEN** those objects MUST be `stream.Transform` instances
+- **AND** piping data through them MUST emit the same digest or ciphertext/plaintext bytes that the corresponding direct `update()`/`final()` calls would produce
+
+#### Scenario: Sandbox calls pbkdf2 with invalid arguments
+- **WHEN** sandboxed code calls `crypto.pbkdf2()` or `crypto.pbkdf2Sync()` with invalid callback, digest, password, salt, iteration, or key length arguments
+- **THEN** the bridge MUST throw or surface Node-compatible `ERR_INVALID_ARG_TYPE` / `ERR_OUT_OF_RANGE` errors instead of plain untyped exceptions
+
 ### Requirement: Bridge FS Open Flag Translation Uses Named Constants
 The bridge `fs` implementation MUST express string-flag translation using named open-flag constants (for example `O_WRONLY | O_CREAT | O_TRUNC`) aligned with Node `fs.constants` semantics, and MUST NOT rely on undocumented numeric literals.
 

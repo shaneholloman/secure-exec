@@ -91,6 +91,11 @@
         __requireExposeCustomGlobal('structuredClone', structuredClonePolyfill);
       }
 
+      if (typeof globalThis.SharedArrayBuffer === 'undefined') {
+        globalThis.SharedArrayBuffer = ArrayBuffer;
+        __requireExposeCustomGlobal('SharedArrayBuffer', ArrayBuffer);
+      }
+
       if (typeof globalThis.btoa !== 'function') {
         __requireExposeCustomGlobal('btoa', function btoa(input) {
           return Buffer.from(String(input), 'binary').toString('base64');
@@ -318,45 +323,178 @@
         }
 
         if (name === 'crypto') {
+          var _runtimeRequire = typeof require === 'function' ? require : globalThis.require;
+          var _streamModule = _runtimeRequire && _runtimeRequire('stream');
+          var _utilModule = _runtimeRequire && _runtimeRequire('util');
+          var _Transform = _streamModule && _streamModule.Transform;
+          var _inherits = _utilModule && _utilModule.inherits;
+
+          function createCryptoRangeError(name, message) {
+            var error = new RangeError(message);
+            error.code = 'ERR_OUT_OF_RANGE';
+            error.name = 'RangeError';
+            return error;
+          }
+
+          function createCryptoError(code, message) {
+            var error = new Error(message);
+            error.code = code;
+            return error;
+          }
+
+          function encodeCryptoResult(buffer, encoding) {
+            if (!encoding || encoding === 'buffer') return buffer;
+            return buffer.toString(encoding);
+          }
+
+          function isSharedArrayBufferInstance(value) {
+            return typeof SharedArrayBuffer !== 'undefined' &&
+              value instanceof SharedArrayBuffer;
+          }
+
+          function isBinaryLike(value) {
+            return Buffer.isBuffer(value) ||
+              ArrayBuffer.isView(value) ||
+              value instanceof ArrayBuffer ||
+              isSharedArrayBufferInstance(value);
+          }
+
+          function normalizeByteSource(value, name, options) {
+            var allowNull = options && options.allowNull;
+            if (allowNull && value === null) {
+              return null;
+            }
+            if (typeof value === 'string') {
+              return Buffer.from(value, 'utf8');
+            }
+            if (Buffer.isBuffer(value)) {
+              return Buffer.from(value);
+            }
+            if (ArrayBuffer.isView(value)) {
+              return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+            }
+            if (value instanceof ArrayBuffer || isSharedArrayBufferInstance(value)) {
+              return Buffer.from(value);
+            }
+            throw createInvalidArgTypeError(
+              name,
+              'of type string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView',
+              value,
+            );
+          }
+
+          function serializeCipherBridgeOptions(options) {
+            if (!options) {
+              return '';
+            }
+            var serialized = {};
+            if (options.authTagLength !== undefined) {
+              serialized.authTagLength = options.authTagLength;
+            }
+            if (options.authTag) {
+              serialized.authTag = options.authTag.toString('base64');
+            }
+            if (options.aad) {
+              serialized.aad = options.aad.toString('base64');
+            }
+            if (options.aadOptions !== undefined) {
+              serialized.aadOptions = options.aadOptions;
+            }
+            if (options.autoPadding !== undefined) {
+              serialized.autoPadding = options.autoPadding;
+            }
+            if (options.validateOnly !== undefined) {
+              serialized.validateOnly = options.validateOnly;
+            }
+            return JSON.stringify(serialized);
+          }
+
           // Overlay host-backed createHash on top of crypto-browserify polyfill
           if (typeof _cryptoHashDigest !== 'undefined') {
-            function SandboxHash(algorithm) {
+            function SandboxHash(algorithm, options) {
+              if (!(this instanceof SandboxHash)) {
+                return new SandboxHash(algorithm, options);
+              }
+              if (!_Transform || !_inherits) {
+                throw new Error('stream.Transform is required for crypto.Hash');
+              }
+              if (typeof algorithm !== 'string') {
+                throw createInvalidArgTypeError('algorithm', 'of type string', algorithm);
+              }
+              _Transform.call(this, options);
               this._algorithm = algorithm;
               this._chunks = [];
+              this._finalized = false;
+              this._cachedDigest = null;
+              this._allowCachedDigest = false;
             }
+            _inherits(SandboxHash, _Transform);
             SandboxHash.prototype.update = function update(data, inputEncoding) {
+              if (this._finalized) {
+                throw createCryptoError('ERR_CRYPTO_HASH_FINALIZED', 'Digest already called');
+              }
               if (typeof data === 'string') {
                 this._chunks.push(Buffer.from(data, inputEncoding || 'utf8'));
-              } else {
+              } else if (isBinaryLike(data)) {
                 this._chunks.push(Buffer.from(data));
+              } else {
+                throw createInvalidArgTypeError(
+                  'data',
+                  'one of type string, Buffer, TypedArray, or DataView',
+                  data,
+                );
               }
               return this;
             };
-            SandboxHash.prototype.digest = function digest(encoding) {
+            SandboxHash.prototype._finishDigest = function _finishDigest() {
+              if (this._cachedDigest) {
+                return this._cachedDigest;
+              }
               var combined = Buffer.concat(this._chunks);
               var resultBase64 = _cryptoHashDigest.applySync(undefined, [
                 this._algorithm,
                 combined.toString('base64'),
               ]);
-              var resultBuffer = Buffer.from(resultBase64, 'base64');
-              if (!encoding || encoding === 'buffer') return resultBuffer;
-              return resultBuffer.toString(encoding);
+              this._cachedDigest = Buffer.from(resultBase64, 'base64');
+              this._finalized = true;
+              return this._cachedDigest;
+            };
+            SandboxHash.prototype.digest = function digest(encoding) {
+              if (this._finalized && !this._allowCachedDigest) {
+                throw createCryptoError('ERR_CRYPTO_HASH_FINALIZED', 'Digest already called');
+              }
+              var resultBuffer = this._finishDigest();
+              this._allowCachedDigest = false;
+              return encodeCryptoResult(resultBuffer, encoding);
             };
             SandboxHash.prototype.copy = function copy() {
+              if (this._finalized) {
+                throw createCryptoError('ERR_CRYPTO_HASH_FINALIZED', 'Digest already called');
+              }
               var c = new SandboxHash(this._algorithm);
               c._chunks = this._chunks.slice();
               return c;
             };
-            // Minimal stream interface
-            SandboxHash.prototype.write = function write(data, encoding) {
-              this.update(data, encoding);
-              return true;
+            SandboxHash.prototype._transform = function _transform(chunk, encoding, callback) {
+              try {
+                this.update(chunk, encoding === 'buffer' ? undefined : encoding);
+                callback();
+              } catch (error) {
+                callback(normalizeCryptoBridgeError(error));
+              }
             };
-            SandboxHash.prototype.end = function end(data, encoding) {
-              if (data) this.update(data, encoding);
+            SandboxHash.prototype._flush = function _flush(callback) {
+              try {
+                var output = this._finishDigest();
+                this._allowCachedDigest = true;
+                this.push(output);
+                callback();
+              } catch (error) {
+                callback(normalizeCryptoBridgeError(error));
+              }
             };
-            result.createHash = function createHash(algorithm) {
-              return new SandboxHash(algorithm);
+            result.createHash = function createHash(algorithm, options) {
+              return new SandboxHash(algorithm, options);
             };
             result.Hash = SandboxHash;
           }
@@ -536,24 +674,93 @@
 
           // Overlay host-backed pbkdf2/pbkdf2Sync
           if (typeof _cryptoPbkdf2 !== 'undefined') {
+            function createPbkdf2ArgTypeError(name, value) {
+              var received;
+              if (value == null) {
+                received = ' Received ' + value;
+              } else if (typeof value === 'object') {
+                received = value.constructor && value.constructor.name ?
+                  ' Received an instance of ' + value.constructor.name :
+                  ' Received [object Object]';
+              } else {
+                var inspected = typeof value === 'string' ? "'" + value + "'" : String(value);
+                received = ' Received type ' + typeof value + ' (' + inspected + ')';
+              }
+              var error = new TypeError('The "' + name + '" argument must be of type number.' + received);
+              error.code = 'ERR_INVALID_ARG_TYPE';
+              return error;
+            }
+
+            function validatePbkdf2Args(password, salt, iterations, keylen, digest) {
+              var pwBuf = normalizeByteSource(password, 'password');
+              var saltBuf = normalizeByteSource(salt, 'salt');
+              if (typeof iterations !== 'number') {
+                throw createPbkdf2ArgTypeError('iterations', iterations);
+              }
+              if (!Number.isInteger(iterations)) {
+                throw createCryptoRangeError(
+                  'iterations',
+                  'The value of "iterations" is out of range. It must be an integer. Received ' + iterations,
+                );
+              }
+              if (iterations < 1 || iterations > 2147483647) {
+                throw createCryptoRangeError(
+                  'iterations',
+                  'The value of "iterations" is out of range. It must be >= 1 && <= 2147483647. Received ' + iterations,
+                );
+              }
+              if (typeof keylen !== 'number') {
+                throw createPbkdf2ArgTypeError('keylen', keylen);
+              }
+              if (!Number.isInteger(keylen)) {
+                throw createCryptoRangeError(
+                  'keylen',
+                  'The value of "keylen" is out of range. It must be an integer. Received ' + keylen,
+                );
+              }
+              if (keylen < 0 || keylen > 2147483647) {
+                throw createCryptoRangeError(
+                  'keylen',
+                  'The value of "keylen" is out of range. It must be >= 0 && <= 2147483647. Received ' + keylen,
+                );
+              }
+              if (typeof digest !== 'string') {
+                throw createInvalidArgTypeError('digest', 'of type string', digest);
+              }
+              return {
+                password: pwBuf,
+                salt: saltBuf,
+              };
+            }
+
             result.pbkdf2Sync = function pbkdf2Sync(password, salt, iterations, keylen, digest) {
-              var pwBuf = typeof password === 'string' ? Buffer.from(password, 'utf8') : Buffer.from(password);
-              var saltBuf = typeof salt === 'string' ? Buffer.from(salt, 'utf8') : Buffer.from(salt);
-              var resultBase64 = _cryptoPbkdf2.applySync(undefined, [
-                pwBuf.toString('base64'),
-                saltBuf.toString('base64'),
-                iterations,
-                keylen,
-                digest,
-              ]);
-              return Buffer.from(resultBase64, 'base64');
+              var normalized = validatePbkdf2Args(password, salt, iterations, keylen, digest);
+              try {
+                var resultBase64 = _cryptoPbkdf2.applySync(undefined, [
+                  normalized.password.toString('base64'),
+                  normalized.salt.toString('base64'),
+                  iterations,
+                  keylen,
+                  digest,
+                ]);
+                return Buffer.from(resultBase64, 'base64');
+              } catch (error) {
+                throw normalizeCryptoBridgeError(error);
+              }
             };
             result.pbkdf2 = function pbkdf2(password, salt, iterations, keylen, digest, callback) {
+              if (typeof digest === 'function' && callback === undefined) {
+                callback = digest;
+                digest = undefined;
+              }
+              if (typeof callback !== 'function') {
+                throw createInvalidArgTypeError('callback', 'of type function', callback);
+              }
               try {
                 var derived = result.pbkdf2Sync(password, salt, iterations, keylen, digest);
-                callback(null, derived);
+                scheduleCryptoCallback(callback, [null, derived]);
               } catch (e) {
-                callback(e);
+                throw normalizeCryptoBridgeError(e);
               }
             };
           }
@@ -603,45 +810,94 @@
           if (typeof _cryptoCipheriv !== 'undefined') {
             var _useSessionCipher = typeof _cryptoCipherivCreate !== 'undefined';
 
-            function SandboxCipher(algorithm, key, iv) {
+            function SandboxCipher(algorithm, key, iv, options) {
+              if (!(this instanceof SandboxCipher)) {
+                return new SandboxCipher(algorithm, key, iv, options);
+              }
+              if (typeof algorithm !== 'string') {
+                throw createInvalidArgTypeError('cipher', 'of type string', algorithm);
+              }
+              _Transform.call(this);
               this._algorithm = algorithm;
-              this._key = typeof key === 'string' ? Buffer.from(key, 'utf8') : Buffer.from(key);
-              this._iv = typeof iv === 'string' ? Buffer.from(iv, 'utf8') : Buffer.from(iv);
+              this._key = normalizeByteSource(key, 'key');
+              this._iv = normalizeByteSource(iv, 'iv', { allowNull: true });
+              this._options = options || undefined;
               this._authTag = null;
               this._finalized = false;
-              if (_useSessionCipher) {
-                this._sessionId = _cryptoCipherivCreate.applySync(undefined, [
-                  'cipher', algorithm,
+              this._sessionCreated = false;
+              this._sessionId = undefined;
+              this._aad = null;
+              this._aadOptions = undefined;
+              this._autoPadding = undefined;
+              this._chunks = [];
+              this._bufferedMode = !_useSessionCipher || !!options;
+              if (!this._bufferedMode) {
+                this._ensureSession();
+              } else if (!options) {
+                _cryptoCipheriv.applySync(undefined, [
+                  this._algorithm,
                   this._key.toString('base64'),
-                  this._iv.toString('base64'),
+                  this._iv === null ? null : this._iv.toString('base64'),
                   '',
+                  serializeCipherBridgeOptions({ validateOnly: true }),
                 ]);
-              } else {
-                this._chunks = [];
               }
             }
+            _inherits(SandboxCipher, _Transform);
+            SandboxCipher.prototype._ensureSession = function _ensureSession() {
+              if (this._bufferedMode || this._sessionCreated) {
+                return;
+              }
+              this._sessionCreated = true;
+              this._sessionId = _cryptoCipherivCreate.applySync(undefined, [
+                'cipher',
+                this._algorithm,
+                this._key.toString('base64'),
+                this._iv === null ? null : this._iv.toString('base64'),
+                serializeCipherBridgeOptions(this._getBridgeOptions()),
+              ]);
+            };
+            SandboxCipher.prototype._getBridgeOptions = function _getBridgeOptions() {
+              var options = {};
+              if (this._options && this._options.authTagLength !== undefined) {
+                options.authTagLength = this._options.authTagLength;
+              }
+              if (this._aad) {
+                options.aad = this._aad;
+              }
+              if (this._aadOptions !== undefined) {
+                options.aadOptions = this._aadOptions;
+              }
+              if (this._autoPadding !== undefined) {
+                options.autoPadding = this._autoPadding;
+              }
+              return Object.keys(options).length === 0 ? null : options;
+            };
             SandboxCipher.prototype.update = function update(data, inputEncoding, outputEncoding) {
+              if (this._finalized) {
+                throw new Error('Attempting to call update() after final()');
+              }
               var buf;
               if (typeof data === 'string') {
                 buf = Buffer.from(data, inputEncoding || 'utf8');
               } else {
-                buf = Buffer.from(data);
+                buf = normalizeByteSource(data, 'data');
               }
-              if (_useSessionCipher) {
+              if (!this._bufferedMode) {
+                this._ensureSession();
                 var resultBase64 = _cryptoCipherivUpdate.applySync(undefined, [this._sessionId, buf.toString('base64')]);
                 var resultBuffer = Buffer.from(resultBase64, 'base64');
-                if (outputEncoding && outputEncoding !== 'buffer') return resultBuffer.toString(outputEncoding);
-                return resultBuffer;
+                return encodeCryptoResult(resultBuffer, outputEncoding);
               }
               this._chunks.push(buf);
-              if (outputEncoding && outputEncoding !== 'buffer') return '';
-              return Buffer.alloc(0);
+              return encodeCryptoResult(Buffer.alloc(0), outputEncoding);
             };
             SandboxCipher.prototype.final = function final(outputEncoding) {
               if (this._finalized) throw new Error('Attempting to call final() after already finalized');
               this._finalized = true;
               var parsed;
-              if (_useSessionCipher) {
+              if (!this._bufferedMode) {
+                this._ensureSession();
                 var resultJson = _cryptoCipherivFinal.applySync(undefined, [this._sessionId]);
                 parsed = JSON.parse(resultJson);
               } else {
@@ -649,8 +905,9 @@
                 var resultJson2 = _cryptoCipheriv.applySync(undefined, [
                   this._algorithm,
                   this._key.toString('base64'),
-                  this._iv.toString('base64'),
+                  this._iv === null ? null : this._iv.toString('base64'),
                   combined.toString('base64'),
+                  serializeCipherBridgeOptions(this._getBridgeOptions()),
                 ]);
                 parsed = JSON.parse(resultJson2);
               }
@@ -658,72 +915,140 @@
                 this._authTag = Buffer.from(parsed.authTag, 'base64');
               }
               var resultBuffer = Buffer.from(parsed.data, 'base64');
-              if (outputEncoding && outputEncoding !== 'buffer') return resultBuffer.toString(outputEncoding);
-              return resultBuffer;
+              return encodeCryptoResult(resultBuffer, outputEncoding);
             };
             SandboxCipher.prototype.getAuthTag = function getAuthTag() {
               if (!this._finalized) throw new Error('Cannot call getAuthTag before final()');
-              if (!this._authTag) throw new Error('Auth tag is only available for GCM ciphers');
+              if (!this._authTag) throw new Error('Auth tag is not available');
               return this._authTag;
             };
-            SandboxCipher.prototype.setAAD = function setAAD() { return this; };
-            SandboxCipher.prototype.setAutoPadding = function setAutoPadding() { return this; };
-            result.createCipheriv = function createCipheriv(algorithm, key, iv) {
-              return new SandboxCipher(algorithm, key, iv);
+            SandboxCipher.prototype.setAAD = function setAAD(aad, options) {
+              this._bufferedMode = true;
+              this._aad = normalizeByteSource(aad, 'buffer');
+              this._aadOptions = options;
+              return this;
+            };
+            SandboxCipher.prototype.setAutoPadding = function setAutoPadding(autoPadding) {
+              this._bufferedMode = true;
+              this._autoPadding = autoPadding !== false;
+              return this;
+            };
+            SandboxCipher.prototype._transform = function _transform(chunk, encoding, callback) {
+              try {
+                var output = this.update(chunk, encoding === 'buffer' ? undefined : encoding);
+                if (output.length) {
+                  this.push(output);
+                }
+                callback();
+              } catch (error) {
+                callback(normalizeCryptoBridgeError(error));
+              }
+            };
+            SandboxCipher.prototype._flush = function _flush(callback) {
+              try {
+                var output = this.final();
+                if (output.length) {
+                  this.push(output);
+                }
+                callback();
+              } catch (error) {
+                callback(normalizeCryptoBridgeError(error));
+              }
+            };
+            result.createCipheriv = function createCipheriv(algorithm, key, iv, options) {
+              return new SandboxCipher(algorithm, key, iv, options);
             };
             result.Cipheriv = SandboxCipher;
           }
 
           if (typeof _cryptoDecipheriv !== 'undefined') {
-            function SandboxDecipher(algorithm, key, iv) {
+            function SandboxDecipher(algorithm, key, iv, options) {
+              if (!(this instanceof SandboxDecipher)) {
+                return new SandboxDecipher(algorithm, key, iv, options);
+              }
+              if (typeof algorithm !== 'string') {
+                throw createInvalidArgTypeError('cipher', 'of type string', algorithm);
+              }
+              _Transform.call(this);
               this._algorithm = algorithm;
-              this._key = typeof key === 'string' ? Buffer.from(key, 'utf8') : Buffer.from(key);
-              this._iv = typeof iv === 'string' ? Buffer.from(iv, 'utf8') : Buffer.from(iv);
+              this._key = normalizeByteSource(key, 'key');
+              this._iv = normalizeByteSource(iv, 'iv', { allowNull: true });
+              this._options = options || undefined;
               this._authTag = null;
               this._finalized = false;
               this._sessionCreated = false;
-              if (!_useSessionCipher) {
-                this._chunks = [];
+              this._aad = null;
+              this._aadOptions = undefined;
+              this._autoPadding = undefined;
+              this._chunks = [];
+              this._bufferedMode = !_useSessionCipher || !!options;
+              if (!this._bufferedMode) {
+                this._ensureSession();
+              } else if (!options) {
+                _cryptoDecipheriv.applySync(undefined, [
+                  this._algorithm,
+                  this._key.toString('base64'),
+                  this._iv === null ? null : this._iv.toString('base64'),
+                  '',
+                  serializeCipherBridgeOptions({ validateOnly: true }),
+                ]);
               }
             }
+            _inherits(SandboxDecipher, _Transform);
             SandboxDecipher.prototype._ensureSession = function _ensureSession() {
-              if (_useSessionCipher && !this._sessionCreated) {
+              if (!this._bufferedMode && !this._sessionCreated) {
                 this._sessionCreated = true;
-                var options = {};
-                if (this._authTag) {
-                  options.authTag = this._authTag.toString('base64');
-                }
                 this._sessionId = _cryptoCipherivCreate.applySync(undefined, [
                   'decipher', this._algorithm,
                   this._key.toString('base64'),
-                  this._iv.toString('base64'),
-                  JSON.stringify(options),
+                  this._iv === null ? null : this._iv.toString('base64'),
+                  serializeCipherBridgeOptions(this._getBridgeOptions()),
                 ]);
               }
             };
+            SandboxDecipher.prototype._getBridgeOptions = function _getBridgeOptions() {
+              var options = {};
+              if (this._options && this._options.authTagLength !== undefined) {
+                options.authTagLength = this._options.authTagLength;
+              }
+              if (this._authTag) {
+                options.authTag = this._authTag;
+              }
+              if (this._aad) {
+                options.aad = this._aad;
+              }
+              if (this._aadOptions !== undefined) {
+                options.aadOptions = this._aadOptions;
+              }
+              if (this._autoPadding !== undefined) {
+                options.autoPadding = this._autoPadding;
+              }
+              return Object.keys(options).length === 0 ? null : options;
+            };
             SandboxDecipher.prototype.update = function update(data, inputEncoding, outputEncoding) {
+              if (this._finalized) {
+                throw new Error('Attempting to call update() after final()');
+              }
               var buf;
               if (typeof data === 'string') {
                 buf = Buffer.from(data, inputEncoding || 'utf8');
               } else {
-                buf = Buffer.from(data);
+                buf = normalizeByteSource(data, 'data');
               }
-              if (_useSessionCipher) {
+              if (!this._bufferedMode) {
                 this._ensureSession();
                 var resultBase64 = _cryptoCipherivUpdate.applySync(undefined, [this._sessionId, buf.toString('base64')]);
                 var resultBuffer = Buffer.from(resultBase64, 'base64');
-                if (outputEncoding && outputEncoding !== 'buffer') return resultBuffer.toString(outputEncoding);
-                return resultBuffer;
+                return encodeCryptoResult(resultBuffer, outputEncoding);
               }
               this._chunks.push(buf);
-              if (outputEncoding && outputEncoding !== 'buffer') return '';
-              return Buffer.alloc(0);
+              return encodeCryptoResult(Buffer.alloc(0), outputEncoding);
             };
             SandboxDecipher.prototype.final = function final(outputEncoding) {
               if (this._finalized) throw new Error('Attempting to call final() after already finalized');
               this._finalized = true;
               var resultBuffer;
-              if (_useSessionCipher) {
+              if (!this._bufferedMode) {
                 this._ensureSession();
                 var resultJson = _cryptoCipherivFinal.applySync(undefined, [this._sessionId]);
                 var parsed = JSON.parse(resultJson);
@@ -731,29 +1056,57 @@
               } else {
                 var combined = Buffer.concat(this._chunks);
                 var options = {};
-                if (this._authTag) {
-                  options.authTag = this._authTag.toString('base64');
-                }
                 var resultBase64 = _cryptoDecipheriv.applySync(undefined, [
                   this._algorithm,
                   this._key.toString('base64'),
-                  this._iv.toString('base64'),
+                  this._iv === null ? null : this._iv.toString('base64'),
                   combined.toString('base64'),
-                  JSON.stringify(options),
+                  serializeCipherBridgeOptions(this._getBridgeOptions()),
                 ]);
                 resultBuffer = Buffer.from(resultBase64, 'base64');
               }
-              if (outputEncoding && outputEncoding !== 'buffer') return resultBuffer.toString(outputEncoding);
-              return resultBuffer;
+              return encodeCryptoResult(resultBuffer, outputEncoding);
             };
             SandboxDecipher.prototype.setAuthTag = function setAuthTag(tag) {
-              this._authTag = typeof tag === 'string' ? Buffer.from(tag, 'base64') : Buffer.from(tag);
+              this._bufferedMode = true;
+              this._authTag = typeof tag === 'string' ? Buffer.from(tag, 'base64') : normalizeByteSource(tag, 'buffer');
               return this;
             };
-            SandboxDecipher.prototype.setAAD = function setAAD() { return this; };
-            SandboxDecipher.prototype.setAutoPadding = function setAutoPadding() { return this; };
-            result.createDecipheriv = function createDecipheriv(algorithm, key, iv) {
-              return new SandboxDecipher(algorithm, key, iv);
+            SandboxDecipher.prototype.setAAD = function setAAD(aad, options) {
+              this._bufferedMode = true;
+              this._aad = normalizeByteSource(aad, 'buffer');
+              this._aadOptions = options;
+              return this;
+            };
+            SandboxDecipher.prototype.setAutoPadding = function setAutoPadding(autoPadding) {
+              this._bufferedMode = true;
+              this._autoPadding = autoPadding !== false;
+              return this;
+            };
+            SandboxDecipher.prototype._transform = function _transform(chunk, encoding, callback) {
+              try {
+                var output = this.update(chunk, encoding === 'buffer' ? undefined : encoding);
+                if (output.length) {
+                  this.push(output);
+                }
+                callback();
+              } catch (error) {
+                callback(normalizeCryptoBridgeError(error));
+              }
+            };
+            SandboxDecipher.prototype._flush = function _flush(callback) {
+              try {
+                var output = this.final();
+                if (output.length) {
+                  this.push(output);
+                }
+                callback();
+              } catch (error) {
+                callback(normalizeCryptoBridgeError(error));
+              }
+            };
+            result.createDecipheriv = function createDecipheriv(algorithm, key, iv, options) {
+              return new SandboxDecipher(algorithm, key, iv, options);
             };
             result.Decipheriv = SandboxDecipher;
           }
@@ -1215,14 +1568,24 @@
 
             function createInvalidArgTypeError(name, expected, value) {
               var received;
-              if (value === undefined) {
-                received = 'undefined';
-              } else if (value === null) {
-                received = 'null';
+              if (value == null) {
+                received = ' Received ' + value;
+              } else if (typeof value === 'function') {
+                received = ' Received function ' + (value.name || 'anonymous');
+              } else if (typeof value === 'object') {
+                if (value.constructor && value.constructor.name) {
+                  received = ' Received an instance of ' + value.constructor.name;
+                } else {
+                  received = ' Received [object Object]';
+                }
               } else {
-                received = 'type ' + typeof value;
+                var inspected = typeof value === 'string' ? "'" + value + "'" : String(value);
+                if (inspected.length > 28) {
+                  inspected = inspected.slice(0, 25) + '...';
+                }
+                received = ' Received type ' + typeof value + ' (' + inspected + ')';
               }
-              var error = new TypeError('The "' + name + '" argument must be ' + expected + '. Received ' + received);
+              var error = new TypeError('The "' + name + '" argument must be ' + expected + '.' + received);
               error.code = 'ERR_INVALID_ARG_TYPE';
               return error;
             }
@@ -1952,6 +2315,16 @@
                 out |= a[i] ^ b[i];
               }
               return out === 0;
+            };
+          }
+          if (typeof result.getFips !== 'function') {
+            result.getFips = function getFips() {
+              return 0;
+            };
+          }
+          if (typeof result.setFips !== 'function') {
+            result.setFips = function setFips() {
+              throw new Error('FIPS mode is not supported in sandbox');
             };
           }
 

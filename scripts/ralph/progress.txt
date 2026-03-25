@@ -3,6 +3,8 @@
 - For stateful Node crypto APIs that browserify only partially emulates, bridge the real host objects by session id and forward methods instead of trying to recreate DH/ECDH state inside the isolate
 - Global WebCrypto is split across `packages/nodejs/src/bridge/process.ts` and `packages/core/isolate-runtime/src/inject/require-setup.ts`; keep `globalThis.crypto` and `require('crypto').webcrypto` aliased to the same object or conformance diverges
 - `CryptoKey` is bridged from both `process.ts` and `require-setup.ts`; keep their `instanceof` semantics aligned (for example via shared `Symbol.hasInstance` behavior) or `KeyObject.toCryptoKey()` conformance breaks even when key data is correct
+- When the session cipher bridge is unavailable, crypto constructor-time validation still has to happen eagerly through the one-shot host bridge; otherwise Node conformance misses `createCipheriv()`/`createDecipheriv()` throw-on-construction cases
+- `bridge-initial-globals.ts` intentionally removes `SharedArrayBuffer`; when vendored conformance files hard-require it, classify the expectation as a `security-constraint` instead of treating the failure as a crypto implementation bug
 - Conformance tests live in packages/secure-exec/tests/node-conformance/ — vendored Node.js v22.14.0 test/parallel/
 - Runner is packages/secure-exec/tests/node-conformance/runner.test.ts — run with: pnpm vitest run packages/secure-exec/tests/node-conformance/runner.test.ts
 - Expectations are in packages/secure-exec/tests/node-conformance/expectations.json — each entry has expected (pass/fail/skip), reason, category
@@ -72,4 +74,13 @@
   - `KeyObject.toCryptoKey()` conformance can fail on constructor identity alone; matching serialized key data is not sufficient if the global and module `CryptoKey` classes diverge.
   - When a crypto conformance test starts running instead of self-skipping, convert stale `vacuous-skip` expectations to a specific `implementation-gap` or `unsupported-module` reason immediately so the filtered suite stays actionable.
   - For WebCrypto derivation algorithms, normalize nested key references and binary algorithm fields before bridge dispatch or host Node crypto receives shape-mismatched payloads.
+---
+## [2026-03-25 04:04 PDT] - US-006
+- Replaced the crypto hash and cipher overlays with `stream.Transform`-compatible wrappers, including callable `Hash`/`Cipheriv`/`Decipheriv` constructors, constructor-time host validation, buffered CCM/AAD handling, and host-backed auth-tag propagation for both GCM and CCM paths.
+- Tightened crypto validation behavior by normalizing Node-style `ERR_INVALID_ARG_TYPE` / `ERR_OUT_OF_RANGE` pbkdf2 errors, restoring `crypto.getFips()` in the overlay, and cleaning stale conformance expectations for newly passing crypto stream/DH/ECB cases while keeping `SharedArrayBuffer`-driven pbkdf2 coverage as an explicit security-constraint expectation.
+- Files changed: `.agent/contracts/node-bridge.md`, `packages/core/isolate-runtime/src/inject/require-setup.ts`, `packages/core/src/generated/isolate-runtime.ts`, `packages/core/src/shared/bridge-contract.ts`, `packages/nodejs/src/bridge-contract.ts`, `packages/nodejs/src/bridge-handlers.ts`, `packages/secure-exec/tests/test-suite/node/crypto.ts`, `packages/secure-exec/tests/node-conformance/expectations.json`, `packages/secure-exec/tests/node-conformance/conformance-report.json`, `docs/nodejs-conformance-report.mdx`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Cipher constructor assertions in Node’s vendored tests still need eager host validation even when the real streaming session bridge is unavailable; a validate-only call through the one-shot bridge keeps those semantics aligned without buffering ciphertext early.
+  - CCM support needs buffered AAD/authTagLength handling in the isolate wrapper plus AEAD-aware auth-tag serialization on the host; fixing only one side leaves `getAuthTag()` and stream-mode CCM tests broken.
+  - `SharedArrayBuffer` is removed by design in the sandbox bootstrap, so conformance failures that stem from that global disappearing should be tracked as `security-constraint` expectations rather than crypto bridge regressions.
 ---

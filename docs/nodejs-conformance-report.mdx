@@ -12,10 +12,10 @@ description: Node.js v22 test/parallel/ conformance results for the secure-exec 
 | Node.js version | 22.14.0 |
 | Source | v22.14.0 (test/parallel/) |
 | Total tests | 3532 |
-| Passing (genuine) | 740 (21.0%) |
+| Passing (genuine) | 748 (21.2%) |
 | Passing (vacuous self-skip) | 33 |
-| Passing (total) | 773 (21.9%) |
-| Expected fail | 2688 |
+| Passing (total) | 781 (22.1%) |
+| Expected fail | 2680 |
 | Skip | 71 |
 | Last updated | 2026-03-26 |
 
@@ -23,7 +23,7 @@ description: Node.js v22 test/parallel/ conformance results for the secure-exec 
 
 | Category | Tests |
 | --- | --- |
-| implementation-gap | 1386 |
+| implementation-gap | 1377 |
 | unsupported-module | 738 |
 | requires-v8-flags | 239 |
 | requires-exec-path | 200 |
@@ -31,7 +31,7 @@ description: Node.js v22 test/parallel/ conformance results for the secure-exec 
 | test-infra | 68 |
 | vacuous-skip | 33 |
 | native-addon | 3 |
-| security-constraint | 1 |
+| security-constraint | 2 |
 
 ## Per-Module Results
 
@@ -70,7 +70,7 @@ description: Node.js v22 test/parallel/ conformance results for the secure-exec 
 | constants | 1 | 0 | 1 | 0 | 0.0% |
 | corepack | 1 | 0 | 1 | 0 | 0.0% |
 | coverage | 1 | 0 | 1 | 0 | 0.0% |
-| crypto | 99 | 48 (12 vacuous) | 51 | 0 | 48.5% |
+| crypto | 99 | 56 (12 vacuous) | 43 | 0 | 56.6% |
 | cwd | 3 | 0 | 3 | 0 | 0.0% |
 | data | 1 | 0 | 1 | 0 | 0.0% |
 | datetime | 1 | 0 | 1 | 0 | 0.0% |
@@ -245,11 +245,11 @@ description: Node.js v22 test/parallel/ conformance results for the secure-exec 
 | wrap | 4 | 0 | 4 | 0 | 0.0% |
 | x509 | 1 | 0 | 1 | 0 | 0.0% |
 | zlib | 53 | 17 | 33 | 3 | 34.0% |
-| **Total** | **3532** | **773** | **2688** | **71** | **22.3%** |
+| **Total** | **3532** | **781** | **2680** | **71** | **22.6%** |
 
 ## Expectations Detail
 
-### implementation-gap (705 entries)
+### implementation-gap (696 entries)
 
 **Glob patterns:**
 
@@ -260,7 +260,7 @@ description: Node.js v22 test/parallel/ conformance results for the secure-exec 
 - `test-https-*.js` — https depends on tls — most tests fail on missing TLS fixture files or crypto API gaps
 - `test-http2-*.js` — http2 module bridged via kernel — most tests fail on API gaps, missing fixtures, or protocol handling
 
-*699 individual tests — see expectations.json for full list.*
+*690 individual tests — see expectations.json for full list.*
 
 ### unsupported-module (191 entries)
 
@@ -745,12 +745,13 @@ description: Node.js v22 test/parallel/ conformance results for the secure-exec 
 
 </Accordion>
 
-### security-constraint (1 entries)
+### security-constraint (2 entries)
 
-<Accordion title="1 individual test">
+<Accordion title="2 individual tests">
 
 | Test | Reason |
 | --- | --- |
+| `test-crypto-pbkdf2.js` | SharedArrayBuffer is intentionally removed by sandbox hardening, so the vendored TypedArray coverage loop aborts before the remaining pbkdf2 assertions run |
 | `test-process-binding-internalbinding-allowlist.js` | process.binding is not supported in sandbox (security constraint) |
 
 </Accordion>
