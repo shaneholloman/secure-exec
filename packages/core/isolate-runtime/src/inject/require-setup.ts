@@ -300,8 +300,10 @@
           // constants object. Node.js zlib.constants bundles all Z_ values plus
           // DEFLATE (1), INFLATE (2), GZIP (3), DEFLATERAW (4), INFLATERAW (5),
           // UNZIP (6), GUNZIP (7). Packages like ssh2 destructure constants.
+          var zlibConstants = typeof result.constants === 'object' && result.constants !== null
+            ? result.constants
+            : {};
           if (typeof result.constants !== 'object' || result.constants === null) {
-            var zlibConstants = {};
             var constKeys = Object.keys(result);
             for (var ci = 0; ci < constKeys.length; ci++) {
               var ck = constKeys[ci];
@@ -309,6 +311,32 @@
                 zlibConstants[ck] = result[ck];
               }
             }
+            // Add Z_* constants that esbuild may strip from the browserify-zlib bundle.
+            if (typeof zlibConstants.Z_NO_FLUSH !== 'number') zlibConstants.Z_NO_FLUSH = 0;
+            if (typeof zlibConstants.Z_PARTIAL_FLUSH !== 'number') zlibConstants.Z_PARTIAL_FLUSH = 1;
+            if (typeof zlibConstants.Z_SYNC_FLUSH !== 'number') zlibConstants.Z_SYNC_FLUSH = 2;
+            if (typeof zlibConstants.Z_FULL_FLUSH !== 'number') zlibConstants.Z_FULL_FLUSH = 3;
+            if (typeof zlibConstants.Z_FINISH !== 'number') zlibConstants.Z_FINISH = 4;
+            if (typeof zlibConstants.Z_BLOCK !== 'number') zlibConstants.Z_BLOCK = 5;
+            if (typeof zlibConstants.Z_TREES !== 'number') zlibConstants.Z_TREES = 6;
+            if (typeof zlibConstants.Z_OK !== 'number') zlibConstants.Z_OK = 0;
+            if (typeof zlibConstants.Z_STREAM_END !== 'number') zlibConstants.Z_STREAM_END = 1;
+            if (typeof zlibConstants.Z_NEED_DICT !== 'number') zlibConstants.Z_NEED_DICT = 2;
+            if (typeof zlibConstants.Z_ERRNO !== 'number') zlibConstants.Z_ERRNO = -1;
+            if (typeof zlibConstants.Z_STREAM_ERROR !== 'number') zlibConstants.Z_STREAM_ERROR = -2;
+            if (typeof zlibConstants.Z_DATA_ERROR !== 'number') zlibConstants.Z_DATA_ERROR = -3;
+            if (typeof zlibConstants.Z_MEM_ERROR !== 'number') zlibConstants.Z_MEM_ERROR = -4;
+            if (typeof zlibConstants.Z_BUF_ERROR !== 'number') zlibConstants.Z_BUF_ERROR = -5;
+            if (typeof zlibConstants.Z_VERSION_ERROR !== 'number') zlibConstants.Z_VERSION_ERROR = -6;
+            if (typeof zlibConstants.Z_NO_COMPRESSION !== 'number') zlibConstants.Z_NO_COMPRESSION = 0;
+            if (typeof zlibConstants.Z_BEST_SPEED !== 'number') zlibConstants.Z_BEST_SPEED = 1;
+            if (typeof zlibConstants.Z_BEST_COMPRESSION !== 'number') zlibConstants.Z_BEST_COMPRESSION = 9;
+            if (typeof zlibConstants.Z_DEFAULT_COMPRESSION !== 'number') zlibConstants.Z_DEFAULT_COMPRESSION = -1;
+            if (typeof zlibConstants.Z_FILTERED !== 'number') zlibConstants.Z_FILTERED = 1;
+            if (typeof zlibConstants.Z_HUFFMAN_ONLY !== 'number') zlibConstants.Z_HUFFMAN_ONLY = 2;
+            if (typeof zlibConstants.Z_RLE !== 'number') zlibConstants.Z_RLE = 3;
+            if (typeof zlibConstants.Z_FIXED !== 'number') zlibConstants.Z_FIXED = 4;
+            if (typeof zlibConstants.Z_DEFAULT_STRATEGY !== 'number') zlibConstants.Z_DEFAULT_STRATEGY = 0;
             // Add mode constants that Node.js exposes but browserify-zlib does not.
             if (typeof zlibConstants.DEFLATE !== 'number') zlibConstants.DEFLATE = 1;
             if (typeof zlibConstants.INFLATE !== 'number') zlibConstants.INFLATE = 2;
@@ -317,8 +345,8 @@
             if (typeof zlibConstants.INFLATERAW !== 'number') zlibConstants.INFLATERAW = 5;
             if (typeof zlibConstants.UNZIP !== 'number') zlibConstants.UNZIP = 6;
             if (typeof zlibConstants.GUNZIP !== 'number') zlibConstants.GUNZIP = 7;
-            result.constants = zlibConstants;
           }
+          result.constants = zlibConstants;
           return result;
         }
 
