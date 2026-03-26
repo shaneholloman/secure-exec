@@ -14,12 +14,20 @@
     "url": "https://github.com/rivet-dev/secure-exec.git",
     "directory": "packages/v8"
   },
+  "scripts": {
+    "build": "tsc",
+    "check-types": "tsc --noEmit"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
   },
   "optionalDependencies": {
     "@secure-exec/v8-linux-x64-gnu": "0.2.0-rc.1",
