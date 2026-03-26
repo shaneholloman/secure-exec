@@ -1,6 +1,7 @@
 ## Codebase Patterns
 - Story-critical Wasm C integration suites should keep local `skipIf` guards for missing binaries, but pair them with separate CI-only artifact-availability tests so missing `native/wasmvm/c/build/*` fixtures fail loudly instead of disappearing behind skips.
 - Reserve `category: "vacuous-skip"` for `expected: "pass"` self-skips only; if a vendored file remains `expected: "skip"` because behavior is still broken, keep a real failure category like `implementation-gap` so conformance category totals stay honest.
+- For overfitting-prone kernel/network stories, keep host-vs-sandbox cross-validation tests even when they currently expose a mismatch; assert the concrete exit code/stderr/raw-byte delta instead of downgrading back to another same-code-path loopback test.
 - Kernel-owned `SocketTable` instances must validate socket owner PIDs against the shared process table; only standalone/internal tables should omit that validation and stay opt-in.
 - `packages/wasmvm/src/driver.ts` resolves the worker entry to `packages/wasmvm/dist/kernel-worker.js` unless a sibling `src/kernel-worker.js` exists, so `packages/wasmvm/src/kernel-worker.ts` changes are not live until `pnpm --filter @secure-exec/wasmvm build` refreshes the worker bundle.
 - Replace active Node loader rewrites with parser-backed transforms: use `es-module-lexer` for `.js` module-syntax detection and `esbuild` CJS transforms with `supported: { "dynamic-import": false }` plus `define: { "import.meta.url": "__filename" }` so `require()` keeps module-relative `import()` behavior without touching strings/comments.
@@ -578,4 +579,13 @@
   - CI-only guard tests are the right companion to local `describe.skipIf(...)` artifact gates: contributors keep fast local skips, while CI gets an explicit hard failure when story-critical binaries are missing.
   - The story-critical C-built fixtures are split across two suites here: `packages/wasmvm/test/` needs `tcp_server`, `udp_echo`, `unix_socket`, and `signal_handler`, while `packages/secure-exec/tests/kernel/` additionally depends on `http_get` for cross-runtime verification.
   - These guards are easy to exercise locally by running the test files with `CI=1`, as long as `native/wasmvm/target/wasm32-wasip1/release/commands` and the required `native/wasmvm/c/build/*` binaries already exist.
+---
+## [2026-03-26 11:20 PDT] - US-041
+- Added `packages/secure-exec/tests/kernel/network-cross-validation.test.ts` to strengthen kernel networking verification with three non-mock layers: a real host-server control check that preserves the current kernel external-client `ENOSYS` mismatch, a raw HTTP response parity check for kernel-backed loopback server framing, and a black-box `express-pass` fixture run that keeps the current host-vs-kernel mismatch explicit.
+- Updated `docs-internal/nodejs-compat-roadmap.md` and the root `AGENTS.md` guidance so future networking work keeps these host-vs-sandbox verification layers in place even before the underlying runtime gaps are fixed.
+- Files changed: `AGENTS.md`, `docs-internal/nodejs-compat-roadmap.md`, `packages/secure-exec/tests/kernel/network-cross-validation.test.ts`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Kernel-mounted Node currently reports `ENOSYS: function not implemented, connect 'http://127.0.0.1:<port>/wire'` on the real host-server control path, so external-client verification should assert that concrete mismatch until the kernel-backed connect path is implemented.
+  - Kernel-backed loopback HTTP response framing is close enough for raw-byte comparison once you strip the time-varying `Date` header, which the current bridge still emits even when userland sets `res.sendDate = false`.
+  - Running the real `express-pass` fixture through a network-enabled kernel currently exits with `TypeError: pathRegexp is not a function`; preserving that black-box mismatch test makes future HTTP fixes prove themselves against a real package instead of only against first-party loopback tests.
 ---

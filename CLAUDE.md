@@ -38,6 +38,7 @@
   - **wire-level snapshot tests**: capture raw protocol bytes and compare against known-good captures from real Node.js
   - **project-matrix cross-validation**: add a project-matrix fixture (`tests/projects/`) using a real npm package that exercises the feature — the matrix compares sandbox output to host Node.js
   - **real-server control tests**: for network features, maintain tests that hit real external endpoints (not loopback) to validate the client independently of the server
+  - **mismatch-preserving verification**: if the control path currently fails, keep the host-vs-sandbox check and assert the concrete mismatch (`stderr`, exit code, missing bytes) instead of deleting the test or replacing it with another same-code-path loopback check
   - **known-test-vector validation**: for crypto, validate against NIST/RFC test vectors — not just round-trip verification
   - **error object snapshot testing**: for ERR_* codes, snapshot-test full error objects (code, message, constructor) against Node.js — not just check `.code` exists
   - **host-side assertion verification**: periodically run assert-heavy conformance tests through host Node.js to verify the assert polyfill isn't masking failures

@@ -32,6 +32,11 @@ When implementing polyfill/bridge features where both sides of a test go through
 
 6. **Host-side assertion verification**: For assert polyfill tests, periodically run assert-heavy conformance tests through host Node.js to verify the assert polyfill itself isn't masking failures.
 
+Current kernel-network verification layers:
+
+- `packages/secure-exec/tests/kernel/network-cross-validation.test.ts` captures raw HTTP bytes for a real host-controlled server/client path and compares kernel-backed bridge output against host Node.js.
+- `packages/secure-exec/tests/kernel/network-cross-validation.test.ts` also runs the `express-pass` black-box fixture through a network-enabled kernel so real-package HTTP coverage stays explicit even when it currently surfaces a host-vs-kernel mismatch.
+
 ## Fix Priority Table
 
 | Fix | Description | Tests |
@@ -3493,4 +3498,3 @@ Modules that are truly unsupported (architecture-limited):
 - `test-v8-take-coverage-noop.js` (fail)
 - `test-v8-take-coverage.js` (fail)
 - `test-v8-version-tag.js` (fail)
-

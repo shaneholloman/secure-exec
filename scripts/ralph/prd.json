@@ -896,7 +896,7 @@
         "Typecheck passes"
       ],
       "priority": 41,
-      "passes": false,
+      "passes": true,
       "notes": "Current lower-level tests are heavily mock-based, and a same-repo loopback HTTP bridge test passing did not prevent the end-to-end cross-runtime failure."
     },
     {
