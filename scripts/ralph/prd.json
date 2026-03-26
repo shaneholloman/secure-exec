@@ -984,7 +984,7 @@
         "Typecheck passes"
       ],
       "priority": 46,
-      "passes": false,
+      "passes": true,
       "notes": "Build on existing kernel signal delivery in packages/core/src/kernel/kernel.ts and process-table logic."
     },
     {

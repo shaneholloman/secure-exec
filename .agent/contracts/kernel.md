@@ -185,13 +185,28 @@ The kernel process table SHALL manage process lifecycle with atomic PID allocati
 - **WHEN** a caller invokes `waitpid(pid)` on a process that has already exited
 - **THEN** the Promise MUST resolve immediately with the recorded exit status
 
-#### Scenario: kill sends signal to running process via driver
-- **WHEN** a caller invokes `kill(pid, signal)` on a running process
+#### Scenario: kill routes default-action signals to the driver
+- **WHEN** a caller invokes `kill(pid, signal)` on a running process and the delivered disposition resolves to `SIG_DFL`
 - **THEN** the kernel MUST route the signal through `driverProcess.kill(signal)` on the process's DriverProcess handle
 
 #### Scenario: kill on exited process is a no-op or throws
 - **WHEN** a caller invokes `kill(pid, signal)` on a process with `status: "exited"`
 - **THEN** the kernel MUST NOT attempt to deliver the signal to the driver
+
+### Requirement: Process Signal Handlers And Pending Delivery
+The kernel process table SHALL preserve per-process signal dispositions, blocked masks, and pending caught-signal delivery state.
+
+#### Scenario: caught signal handler runs instead of the default driver action
+- **WHEN** a running process has a registered caught disposition for a delivered signal
+- **THEN** the kernel MUST invoke that handler and MUST NOT route the signal through `driverProcess.kill(signal)` unless a later delivery falls back to `SIG_DFL`
+
+#### Scenario: blocked caught signals remain pending until unmasked
+- **WHEN** `sigprocmask()` blocks a delivered signal for a running process
+- **THEN** the kernel MUST queue that signal in the process's pending set instead of dispatching it immediately
+
+#### Scenario: unmasking delivers queued pending signals
+- **WHEN** `sigprocmask()` later unblocks one or more queued pending signals
+- **THEN** the kernel MUST dispatch those pending signals immediately in ascending signal-number order, skipping any that remain blocked
 
 #### Scenario: Zombie processes are cleaned up after TTL
 - **WHEN** a process exits and transitions to zombie state

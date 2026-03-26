@@ -49,6 +49,7 @@
 - Raw loopback `net.connect()` traffic into sandbox `http.createServer()` is parsed in `packages/nodejs/src/bridge/network.ts`; ignore leading `\r\n` between pipelined requests and only restart parsing on new socket writes, or leftover CRLF bytes can spin the parser forever
 - `http.Agent` pool progress under `maxTotalSockets` depends on evicting idle free sockets from other origins when the total socket budget is exhausted; otherwise cross-origin queues can deadlock even if per-origin logic looks correct
 - Kernel blocking-I/O completion claims should include `packages/core/test/kernel/kernel-integration.test.ts` coverage that exercises real process-owned FDs through `KernelInterface` (`fdWrite`, `flock`, `fdPollWait`), not just manager-level unit tests.
+- Kernel signal-handler integration tests should use a spawned process plus `KernelInterface.processTable` / `KernelInterface.socketTable`, and any loopback socket variant must opt into network permission explicitly so the test reaches signal delivery instead of failing at the permission gate.
 
 ## [2026-03-26 10:53 PDT] - US-039
 - Corrected Node conformance vacuous-pass accounting by centralizing expectation classification in a shared helper that both `runner.test.ts` and `scripts/generate-node-conformance-report.ts` use.
@@ -633,4 +634,14 @@
   - The story’s core behavior was already implemented; the missing proof was kernel-level regression coverage for duplicated-descriptor close paths, especially `fdDup2` replacing the last reference to an already-unlinked inode.
   - Deferred-unlink integration tests should verify both sides of the invariant: path lookups fail immediately after unlink, while reads through the surviving shared FD still succeed until the final close releases the inode.
   - `fdDup` and `fdDup2` should not increase inode `openRefCount`; that counter tracks live open file descriptions, so duplicated FDs should keep the count at `1` until the shared description’s final reference closes.
+---
+## [2026-03-26 11:57 PDT] - US-046
+- Added live kernel integration coverage for signal handler registration, masking/unmasking, pending delivery, `SA_RESTART`, and `SA_RESETHAND` using a spawned process plus `KernelInterface.processTable` and `KernelInterface.socketTable`.
+- Updated the signal-focused socket tests to opt into loopback network permission explicitly, and tightened the kernel contract guidance around caught-signal delivery and pending-signal unmask semantics.
+- Verified with `pnpm vitest run packages/core/test/kernel/signal-handlers.test.ts packages/core/test/kernel/kernel-integration.test.ts` and `pnpm --filter @secure-exec/core check-types`.
+- Files changed: `.agent/contracts/kernel.md`, `CLAUDE.md`, `packages/core/test/kernel/kernel-integration.test.ts`, `packages/core/test/kernel/signal-handlers.test.ts`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - Signal-handler kernel integration is best exercised through a real spawned PID plus `KernelInterface.processTable` and `KernelInterface.socketTable`; unit `ProcessTable` tests do not prove live wait interruption or restart semantics.
+  - Signal tests that open loopback sockets now need explicit network permission (`network: () => ({ allow: true })` or `networkCheck`) or they fail before reaching the signal path.
+  - `createTestKernel()` mount-time command registration touches `/bin`, so permission fixtures that only allow network still need filesystem permission if they mount mock drivers.
 ---

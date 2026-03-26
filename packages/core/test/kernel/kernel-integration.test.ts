@@ -14,6 +14,12 @@ import {
 	O_RDONLY,
 	O_TRUNC,
 	O_WRONLY,
+	SA_RESETHAND,
+	SA_RESTART,
+	SIGALRM,
+	SIG_BLOCK,
+	SIGTERM,
+	SIG_UNBLOCK,
 } from "../../src/kernel/types.js";
 import { LOCK_EX, LOCK_UN } from "../../src/kernel/file-lock.js";
 import { createKernel } from "../../src/kernel/kernel.js";
@@ -1589,6 +1595,123 @@ describe("kernel + MockRuntimeDriver integration", () => {
 
 			expect(killSignals).toEqual([15, 9]);
 			expect(code).toBe(128 + 9);
+		});
+
+		it("caught signals stay pending while masked and deliver when unmasked", async () => {
+			const killSignals: number[] = [];
+			const handledSignals: number[] = [];
+			const driver = new MockRuntimeDriver(["daemon"], {
+				daemon: { neverExit: true, killSignals },
+			});
+			({ kernel } = await createTestKernel({ drivers: [driver] }));
+
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("daemon", []);
+
+			ki.processTable.sigaction(proc.pid, 1, {
+				handler: (signal) => handledSignals.push(signal),
+				mask: new Set([SIGTERM]),
+				flags: 0,
+			});
+			ki.processTable.sigprocmask(proc.pid, SIG_BLOCK, new Set([1]));
+
+			proc.kill(1);
+
+			const blockedState = ki.processTable.getSignalState(proc.pid);
+			expect(blockedState.handlers.get(1)).toEqual({
+				handler: expect.any(Function),
+				mask: new Set([SIGTERM]),
+				flags: 0,
+			});
+			expect(blockedState.pendingSignals.has(1)).toBe(true);
+			expect(handledSignals).toEqual([]);
+			expect(killSignals).toEqual([]);
+
+			ki.processTable.sigprocmask(proc.pid, SIG_UNBLOCK, new Set([1]));
+
+			const unblockedState = ki.processTable.getSignalState(proc.pid);
+			expect(unblockedState.pendingSignals.has(1)).toBe(false);
+			expect(handledSignals).toEqual([1]);
+			expect(killSignals).toEqual([]);
+
+			proc.kill(SIGTERM);
+			await expect(proc.wait()).resolves.toBe(128 + SIGTERM);
+		});
+
+		it("SA_RESTART keeps a blocking recv alive for a spawned process", async () => {
+			const driver = new MockRuntimeDriver(["daemon"], {
+				daemon: { neverExit: true, killSignals: [] },
+			});
+			({
+				kernel,
+			} = await createTestKernel({
+				drivers: [driver],
+				permissions: {
+					fs: () => ({ allow: true }),
+					network: () => ({ allow: true }),
+				},
+			}));
+
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("daemon", []);
+
+			ki.processTable.sigaction(proc.pid, SIGALRM, {
+				handler: () => {},
+				mask: new Set(),
+				flags: SA_RESTART,
+			});
+
+			const listenId = ki.socketTable.create(2, 1, 0, proc.pid);
+			await ki.socketTable.bind(listenId, { host: "127.0.0.1", port: 9091 });
+			await ki.socketTable.listen(listenId, 1);
+
+			const clientId = ki.socketTable.create(2, 1, 0, proc.pid);
+			await ki.socketTable.connect(clientId, { host: "127.0.0.1", port: 9091 });
+			const serverId = ki.socketTable.accept(listenId)!;
+
+			const recvPromise = ki.socketTable.recv(serverId, 1024, 0, { block: true, pid: proc.pid });
+			await Promise.resolve();
+
+			proc.kill(SIGALRM);
+			ki.socketTable.send(clientId, new TextEncoder().encode("pong"));
+
+			await expect(recvPromise).resolves.toEqual(new TextEncoder().encode("pong"));
+
+			proc.kill(SIGTERM);
+			await expect(proc.wait()).resolves.toBe(128 + SIGTERM);
+		});
+
+		it("SA_RESETHAND only catches the first delivery for a spawned process", async () => {
+			const killSignals: number[] = [];
+			const handledSignals: number[] = [];
+			const driver = new MockRuntimeDriver(["daemon"], {
+				daemon: { neverExit: true, killSignals },
+			});
+			({ kernel } = await createTestKernel({ drivers: [driver] }));
+
+			const ki = driver.kernelInterface!;
+			const proc = kernel.spawn("daemon", []);
+
+			ki.processTable.sigaction(proc.pid, SIGTERM, {
+				handler: (signal) => handledSignals.push(signal),
+				mask: new Set(),
+				flags: SA_RESETHAND,
+			});
+
+			proc.kill(SIGTERM);
+
+			expect(handledSignals).toEqual([SIGTERM]);
+			expect(killSignals).toEqual([]);
+			expect(ki.processTable.getSignalState(proc.pid).handlers.get(SIGTERM)).toEqual({
+				handler: "default",
+				mask: new Set(),
+				flags: 0,
+			});
+
+			proc.kill(SIGTERM);
+
+			await expect(proc.wait()).resolves.toBe(128 + SIGTERM);
+			expect(killSignals).toEqual([SIGTERM]);
 		});
 	});
 

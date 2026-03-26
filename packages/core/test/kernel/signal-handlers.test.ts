@@ -9,6 +9,8 @@ import {
 } from "../../src/kernel/types.js";
 import type { DriverProcess, ProcessContext, SignalHandler } from "../../src/kernel/types.js";
 
+const allowNetwork = () => ({ allow: true });
+
 function createMockDriverProcess(): DriverProcess {
 	let exitResolve: (code: number) => void;
 	const exitPromise = new Promise<number>((r) => { exitResolve = r; });
@@ -51,6 +53,7 @@ async function createConnectedSockets(
 	pid: number,
 ): Promise<{ socketTable: SocketTable; listenId: number; clientId: number; serverId: number }> {
 	const socketTable = new SocketTable({
+		networkCheck: allowNetwork,
 		getSignalState: (targetPid) => processTable.getSignalState(targetPid),
 	});
 	const listenId = socketTable.create(AF_INET, SOCK_STREAM, 0, pid);
@@ -473,6 +476,7 @@ describe("Signal handlers (sigaction / sigprocmask)", () => {
 			const processTable = new ProcessTable();
 			const { pid } = registerProcess(processTable);
 			const socketTable = new SocketTable({
+				networkCheck: allowNetwork,
 				getSignalState: (targetPid) => processTable.getSignalState(targetPid),
 			});
 			const listenId = socketTable.create(AF_INET, SOCK_STREAM, 0, pid);
