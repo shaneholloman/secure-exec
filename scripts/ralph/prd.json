@@ -1265,7 +1265,7 @@
         "Typecheck passes"
       ],
       "priority": 57,
-      "passes": false,
+      "passes": true,
       "notes": "Current OpenCode headless coverage is explicitly binary-spawn based and mock-server driven. This story must distinguish true sandbox E2E from host-side substitution."
     },
     {

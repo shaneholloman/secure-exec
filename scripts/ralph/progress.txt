@@ -1,5 +1,6 @@
 ## Codebase Patterns
 - For host-binary CLI/SDK regressions, pair a direct `kernel.spawn()` control with a sandbox `child_process.spawn()` probe for the same command; if the direct kernel command works but the sandbox probe hangs, the blocker is in the Node child_process bridge path rather than the tool binary or provider config.
+- Sandbox `child_process.spawn()` does not yet honor `stdio` option semantics for host-binary commands, so headless CLI tests that need EOF should explicitly call `child.stdin.end()` instead of relying on `stdio: ['ignore', ...]`.
 - Exec-mode Node scripts that depend on child-process/stream callbacks must finish on `_waitForActiveHandles()` inside the same V8 execution; host-side resource polling alone cannot deliver later `StreamEvent` callbacks after the native session has already returned from `Execute`.
 - `process.stdin.setRawMode(true)` on a kernel-mounted Node runtime must disable PTY `icrnl` and `isig` alongside `icanon`/`echo`; leaving `icrnl` on rewrites Enter from `\r` to `\n` and breaks raw-mode TUIs.
 - Native `v8-runtime` must load ICU common data before V8 platform init (`build.rs` + `v8::icu::set_common_data_74(...)`), or `Intl.Segmenter.segment()` can tear down the sandbox with `IPC connection closed`.
@@ -836,4 +837,14 @@
   - Child-process bridge hangs can come from exec-lifetime mismatches, not just bad event names: if the native V8 session returns from `Execute` before `_waitForActiveHandles()` resolves, later `StreamEvent` callbacks are silently ignored by the idle session thread.
   - For mounted host-binary regressions, keep one deterministic local `--version` smoke alongside any credentialed SDK/server harness; it shortens debugging and proves the bridge before provider-specific startup or shutdown behavior enters the picture.
   - OpenCode's real-provider SDK flow now gets past the bridge blocker and reaches server teardown; a forced `SIGKILL` after successful prompt/tool assertions is the next concrete follow-up, not part of this bridge fix.
+---
+## [2026-03-26 21:13 PDT] - US-065
+- Added `packages/secure-exec/tests/cli-tools/opencode-headless-real-provider.test.ts`, an opt-in real-provider headless harness that runs `opencode run --format json` through sandboxed Node `child_process.spawn()`, parses the NDJSON output, and asserts the final assistant response matches the expected `note` and `pwd` values.
+- Verified the sandboxed headless flow performs both a filesystem tool action (`read note.txt`) and a command/tool action (`bash pwd`) against a real temp worktree, then exits cleanly with code 0.
+- Updated shared repo guidance to capture the current stdin-close gotcha for host-binary headless CLI tests.
+- Files changed: `packages/secure-exec/tests/cli-tools/opencode-headless-real-provider.test.ts`, `AGENTS.md`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- **Learnings for future iterations:**
+  - OpenCode headless automation is best asserted via `--format json`: the NDJSON stream exposes stable `tool_use` events for `read` and `bash`, plus a final `text` event for the assistant response.
+  - Sandboxed host-binary CLI tests that expect EOF on stdin must call `child.stdin.end()` explicitly; `stdio: ['ignore', ...]` does not currently close stdin through the bridge.
+  - A minimal real-provider prompt like `Read note.txt, run pwd, then reply with a JSON object containing note and pwd only.` keeps the OpenCode headless flow fast enough for sub-minute checks while still proving filesystem and command tool usage.
 ---
