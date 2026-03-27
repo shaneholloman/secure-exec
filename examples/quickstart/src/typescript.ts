@@ -2,10 +2,14 @@ import {
   NodeRuntime,
   createNodeDriver,
   createNodeRuntimeDriverFactory,
+  allowAllFs,
 } from "secure-exec";
 import { createTypeScriptTools } from "@secure-exec/typescript";
 
-const systemDriver = createNodeDriver();
+const systemDriver = createNodeDriver({
+  moduleAccess: { cwd: process.cwd() },
+  permissions: { ...allowAllFs },
+});
 const runtimeDriverFactory = createNodeRuntimeDriverFactory();
 
 const runtime = new NodeRuntime({
