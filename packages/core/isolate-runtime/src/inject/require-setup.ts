@@ -4493,6 +4493,18 @@
           return dcModule;
         }
 
+        // Handle path submodules (path/win32, path/posix)
+        if (name === 'path/win32') {
+          var pathMod = _requireFrom('path', fromDir);
+          __internalModuleCache[name] = pathMod.win32 || pathMod;
+          return __internalModuleCache[name];
+        }
+        if (name === 'path/posix') {
+          var pathMod2 = _requireFrom('path', fromDir);
+          __internalModuleCache[name] = pathMod2.posix || pathMod2;
+          return __internalModuleCache[name];
+        }
+
         // Get deferred module stubs
         if (_deferredCoreModules.has(name)) {
           if (__internalModuleCache[name]) return __internalModuleCache[name];

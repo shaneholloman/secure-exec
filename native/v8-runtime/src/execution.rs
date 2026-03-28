@@ -1252,6 +1252,43 @@ fn resolve_or_compile_module<'s>(
     Some(module)
 }
 
+/// Callback invoked by V8 when `import.meta` is accessed in an ES module.
+/// Sets `import.meta.url` to a `file://` URL derived from the module's resource name.
+#[cfg_attr(test, allow(dead_code))]
+pub extern "C" fn import_meta_object_callback(
+    context: v8::Local<v8::Context>,
+    module: v8::Local<v8::Module>,
+    meta: v8::Local<v8::Object>,
+) {
+    let scope = &mut unsafe { v8::CallbackScope::new(context) };
+
+    // Look up the module's resource name from MODULE_RESOLVE_STATE.module_names
+    // which maps identity_hash → resource_name.
+    let identity_hash = module.get_identity_hash();
+    let url_str = MODULE_RESOLVE_STATE.with(|cell| {
+        let state_opt = cell.borrow();
+        if let Some(ref state) = *state_opt {
+            if let Some(name) = state.module_names.get(&identity_hash) {
+                let n = name.clone();
+                if n.starts_with("file://") {
+                    return Some(n);
+                } else if n.starts_with("/") {
+                    return Some(format!("file://{}", n));
+                } else {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    });
+
+    if let Some(url) = url_str {
+        let key = v8::String::new(scope, "url").unwrap();
+        let value = v8::String::new(scope, &url).unwrap();
+        meta.set(scope, key.into(), value.into());
+    }
+}
+
 #[cfg_attr(test, allow(dead_code))]
 fn dynamic_import_namespace_callback(
     _scope: &mut v8::HandleScope,

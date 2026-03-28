@@ -64,6 +64,15 @@ const STATIC_BUILTIN_BINDINGS: Readonly<Record<string, string>> = {
 	child_process: "globalThis._childProcessModule || globalThis.bridge?.childProcess || {}",
 	process: "globalThis.process || {}",
 	v8: "globalThis._moduleCache?.v8 || {}",
+	async_hooks: 'globalThis._requireFrom("async_hooks", "/")',
+	perf_hooks: 'globalThis._requireFrom("perf_hooks", "/")',
+	worker_threads: 'globalThis._requireFrom("worker_threads", "/")',
+	diagnostics_channel: 'globalThis._requireFrom("diagnostics_channel", "/")',
+	net: 'globalThis._requireFrom("net", "/")',
+	tls: 'globalThis._requireFrom("tls", "/")',
+	readline: 'globalThis._requireFrom("readline", "/")',
+	"path/win32": 'globalThis._requireFrom("path/win32", "/")',
+	"path/posix": 'globalThis._requireFrom("path/posix", "/")',
 };
 
 const STATIC_BUILTIN_WRAPPER_SOURCES: Readonly<Record<string, string>> = {
@@ -88,6 +97,36 @@ const STATIC_BUILTIN_WRAPPER_SOURCES: Readonly<Record<string, string>> = {
 	),
 	process: buildWrapperSource(STATIC_BUILTIN_BINDINGS.process, BUILTIN_NAMED_EXPORTS.process),
 	v8: buildWrapperSource(STATIC_BUILTIN_BINDINGS.v8, []),
+	async_hooks: buildWrapperSource(
+		STATIC_BUILTIN_BINDINGS.async_hooks,
+		BUILTIN_NAMED_EXPORTS.async_hooks,
+	),
+	perf_hooks: buildWrapperSource(
+		STATIC_BUILTIN_BINDINGS.perf_hooks,
+		BUILTIN_NAMED_EXPORTS.perf_hooks,
+	),
+	worker_threads: buildWrapperSource(
+		STATIC_BUILTIN_BINDINGS.worker_threads,
+		BUILTIN_NAMED_EXPORTS.worker_threads ?? [],
+	),
+	diagnostics_channel: buildWrapperSource(
+		STATIC_BUILTIN_BINDINGS.diagnostics_channel,
+		BUILTIN_NAMED_EXPORTS.diagnostics_channel ?? [],
+	),
+	net: buildWrapperSource(STATIC_BUILTIN_BINDINGS.net, BUILTIN_NAMED_EXPORTS.net ?? []),
+	tls: buildWrapperSource(STATIC_BUILTIN_BINDINGS.tls, BUILTIN_NAMED_EXPORTS.tls ?? []),
+	readline: buildWrapperSource(
+		STATIC_BUILTIN_BINDINGS.readline,
+		BUILTIN_NAMED_EXPORTS.readline ?? [],
+	),
+	"path/win32": buildWrapperSource(
+		STATIC_BUILTIN_BINDINGS["path/win32"],
+		BUILTIN_NAMED_EXPORTS.path ?? [],
+	),
+	"path/posix": buildWrapperSource(
+		STATIC_BUILTIN_BINDINGS["path/posix"],
+		BUILTIN_NAMED_EXPORTS.path ?? [],
+	),
 };
 
 export function getBuiltinBindingExpression(moduleName: string): string | null {

@@ -3355,6 +3355,17 @@ export function buildModuleLoadingBridgeHandlers(
 			);
 		}
 
+		// Fallback for Node.js builtin submodules (e.g. stream/consumers, path/posix).
+		// These use the node: prefix or match known builtin patterns.
+		// Delegate to the CJS require stub which handles more modules than
+		// the static ESM wrappers above.
+		if (p.startsWith("node:") && !bare.includes(".")) {
+			return createBuiltinESMWrapper(
+				`globalThis._requireFrom(${JSON.stringify(bare)}, "/")`,
+				getHostBuiltinNamedExports(bare),
+			);
+		}
+
 		const hostPath = deps.sandboxToHostPath?.(p) ?? p;
 		const syncSource = loadHostModuleSourceSync(hostPath, p, loadMode);
 		if (syncSource !== null) {

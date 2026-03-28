@@ -370,6 +370,9 @@ fn session_thread(
                             iso.set_host_import_module_dynamically_callback(
                                 execution::dynamic_import_callback,
                             );
+                            iso.set_host_initialize_import_meta_object_callback(
+                                execution::import_meta_object_callback,
+                            );
                             let ctx = isolate::create_context(&mut iso);
                             _v8_context = Some(ctx);
                             v8_isolate = Some(iso);
