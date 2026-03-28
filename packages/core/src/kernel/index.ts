@@ -65,6 +65,8 @@ export {
 	createProcessScopedFileSystem,
 	resolveProcSelfPath,
 } from "./proc-layer.js";
+export { createProcBackend } from "./proc-backend.js";
+export type { ProcBackendOptions } from "./proc-backend.js";
 export { PipeManager } from "./pipe-manager.js";
 export { PtyManager } from "./pty.js";
 export type { LineDisciplineConfig } from "./pty.js";
