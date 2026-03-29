@@ -772,6 +772,8 @@ export class NodeExecutionDriver implements RuntimeDriver {
 	private configuredMaxTimers?: number;
 	private configuredMaxHandles?: number;
 	private pid?: number;
+	// Track the current V8 session so it can be destroyed on terminate/dispose
+	private _currentSession: V8Session | null = null;
 
 	constructor(options: NodeExecutionDriverOptions) {
 		this.memoryLimit = options.memoryLimit ?? 128;
@@ -1250,6 +1252,9 @@ export class NodeExecutionDriver implements RuntimeDriver {
 				bindingKeys,
 			);
 
+			// Track session so terminate/dispose can destroy it
+			this._currentSession = session;
+
 			// Execute in V8 session
 			const result = await session.execute({
 				bridgeCode,
@@ -1381,6 +1386,7 @@ export class NodeExecutionDriver implements RuntimeDriver {
 				exports: undefined as T,
 			};
 		} finally {
+			this._currentSession = null;
 			await session.destroy().catch(() => {});
 			this.finalizeExecutionState(finalExitCode);
 		}
@@ -1389,6 +1395,11 @@ export class NodeExecutionDriver implements RuntimeDriver {
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		// Destroy V8 session to unregister handler and unref IPC socket
+		if (this._currentSession) {
+			this._currentSession.destroy().catch(() => {});
+			this._currentSession = null;
+		}
 		killActiveChildProcesses(this.state);
 		clearActiveHostTimers(this.state);
 		if (this.pid !== undefined) {
@@ -1398,6 +1409,11 @@ export class NodeExecutionDriver implements RuntimeDriver {
 
 	async terminate(): Promise<void> {
 		if (this.disposed) return;
+		// Destroy V8 session to unregister handler and unref IPC socket
+		if (this._currentSession) {
+			await this._currentSession.destroy().catch(() => {});
+			this._currentSession = null;
+		}
 		killActiveChildProcesses(this.state);
 		const closers = Array.from(this.state.activeHttpServerClosers.values());
 		await Promise.allSettled(closers.map((close) => close()));

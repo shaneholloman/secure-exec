@@ -880,4 +880,60 @@ describe('Node RuntimeDriver', () => {
       expect(output).toContain('direct node script');
     });
   });
+
+  describe('dispose cleanup (no dangling handles)', () => {
+    it('kernel.dispose after killing a streamStdin process leaves no active handles', async () => {
+      const k = createKernel({ filesystem: new SimpleVFS() });
+      await k.mount(createNodeRuntime());
+
+      // Write a long-running stdin reader script
+      await k.writeFile('/tmp/reader.mjs', new TextEncoder().encode(
+        `process.stdin.setEncoding('utf8');\n` +
+        `process.stdin.on('data', (d) => process.stdout.write('GOT:' + d));\n`
+      ));
+
+      const chunks: Uint8Array[] = [];
+      const proc = k.spawn('node', ['/tmp/reader.mjs'], {
+        streamStdin: true,
+        onStdout: (data) => chunks.push(data),
+      });
+
+      // Send data and verify it's received
+      proc.writeStdin('hello\n');
+      await new Promise(r => setTimeout(r, 200));
+      const output = chunks.map(c => new TextDecoder().decode(c)).join('');
+      expect(output).toContain('GOT:hello');
+
+      // Kill the process
+      proc.kill();
+      const code = await proc.wait();
+      expect(code).toBe(143); // SIGTERM = 128 + 15
+
+      // Dispose the kernel — if the IPC socket is still ref'd, vitest hangs
+      await k.dispose();
+    }, 10_000);
+
+    it('kernel.dispose after killing a streamStdin process closes stdin source', async () => {
+      const k = createKernel({ filesystem: new SimpleVFS() });
+      await k.mount(createNodeRuntime());
+
+      // Write a script that blocks on stdin
+      await k.writeFile('/tmp/blocker.mjs', new TextEncoder().encode(
+        `process.stdin.resume();\n` +
+        `process.stdin.on('data', () => {});\n`
+      ));
+
+      const proc = k.spawn('node', ['/tmp/blocker.mjs'], {
+        streamStdin: true,
+      });
+
+      // Kill immediately — stdin source should be closed
+      proc.kill();
+      const code = await proc.wait();
+      expect(code).toBe(143);
+
+      await k.dispose();
+      // Test passes if it completes without hanging
+    }, 10_000);
+  });
 });

@@ -565,6 +565,10 @@ class NodeRuntimeDriver implements RuntimeDriver {
         if (exitResolved) return;
         const normalizedSignal = signal > 0 ? signal : 15;
         killedSignal = normalizedSignal;
+        // Close streaming stdin so pending reads resolve
+        if (ctx.streamStdin) {
+          streamCloseStdin();
+        }
         const driver = this._activeDrivers.get(ctx.pid);
         if (!driver) {
           reportKilledExit(normalizedSignal);
