@@ -443,6 +443,53 @@ describe('Node RuntimeDriver', () => {
       expect(code).toBe(0);
       expect(output).toContain('0');
     });
+
+    it('streamStdin writeStdin delivers data exactly once per write', async () => {
+      const vfs = new SimpleVFS();
+      kernel = createKernel({ filesystem: vfs as any });
+      await kernel.mount(createNodeRuntime());
+
+      // Script: count every stdin data event and log each chunk to stderr
+      const stderrChunks: Uint8Array[] = [];
+      const proc = kernel.spawn('node', ['-e', `
+        let count = 0;
+        process.stdin.on('data', (chunk) => {
+          count++;
+          const text = typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+          process.stderr.write('CHUNK:' + count + ':' + text.trim() + '\\n');
+        });
+        process.stdin.on('end', () => {
+          process.stderr.write('TOTAL:' + count + '\\n');
+        });
+      `], {
+        streamStdin: true,
+        onStderr: (data) => stderrChunks.push(data),
+      });
+
+      // Write 3 messages with small delays between them
+      const enc = new TextEncoder();
+      proc.writeStdin(enc.encode('msg1\n'));
+      await new Promise(r => setTimeout(r, 100));
+      proc.writeStdin(enc.encode('msg2\n'));
+      await new Promise(r => setTimeout(r, 100));
+      proc.writeStdin(enc.encode('msg3\n'));
+      await new Promise(r => setTimeout(r, 100));
+      proc.closeStdin();
+
+      const code = await proc.wait();
+      const stderr = stderrChunks.map(c => new TextDecoder().decode(c)).join('');
+      expect(code).toBe(0);
+
+      // Each message must arrive exactly once — no doubling
+      const chunkLines = stderr.split('\n').filter(l => l.startsWith('CHUNK:'));
+      expect(chunkLines).toHaveLength(3);
+      expect(chunkLines[0]).toContain('msg1');
+      expect(chunkLines[1]).toContain('msg2');
+      expect(chunkLines[2]).toContain('msg3');
+
+      // Total must be exactly 3
+      expect(stderr).toContain('TOTAL:3');
+    });
   });
 
   describe('exploit/abuse paths', () => {
