@@ -124,6 +124,28 @@ importers:
         specifier: ^4.19.2
         version: 4.21.0
 
+  examples/doom:
+    dependencies:
+      '@secure-exec/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@secure-exec/nodejs':
+        specifier: workspace:*
+        version: link:../../packages/nodejs
+      '@secure-exec/wasmvm':
+        specifier: workspace:*
+        version: link:../../packages/wasmvm
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.19.3
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   examples/features:
     dependencies:
       '@secure-exec/typescript':
@@ -497,17 +519,17 @@ importers:
   packages/v8:
     optionalDependencies:
       '@secure-exec/v8-darwin-arm64':
-        specifier: 0.2.0-rc.1
-        version: 0.2.0-rc.1
+        specifier: 0.2.0-rc.2
+        version: 0.2.0-rc.2
       '@secure-exec/v8-darwin-x64':
-        specifier: 0.2.0-rc.1
-        version: 0.2.0-rc.1
+        specifier: 0.2.0-rc.2
+        version: 0.2.0-rc.2
       '@secure-exec/v8-linux-arm64-gnu':
-        specifier: 0.2.0-rc.1
-        version: 0.2.0-rc.1
+        specifier: 0.2.0-rc.2
+        version: 0.2.0-rc.2
       '@secure-exec/v8-linux-x64-gnu':
-        specifier: 0.2.0-rc.1
-        version: 0.2.0-rc.1
+        specifier: 0.2.0-rc.2
+        version: 0.2.0-rc.2
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -3694,32 +3716,32 @@ packages:
     requiresBuild: true
     optional: true
 
-  /@secure-exec/v8-darwin-arm64@0.2.0-rc.1:
-    resolution: {integrity: sha512-I65TZBkaYrZTi69aKocwBt6ojrunZuwfGah5H9a68RzF1usi3Vp/QuyH43dPQOzJMLPD7T87M+dGKZuuxtyKVw==}
+  /@secure-exec/v8-darwin-arm64@0.2.0-rc.2:
+    resolution: {integrity: sha512-251Hxptkm8kfoTXUpopHBS9jZ1bMca1oMsxHbWLKFz6zJ18RLVSV/XaugDm+u8Np1UFvKmPiBq05HLg3GE3C/A==}
     cpu: [arm64]
     os: [darwin]
     requiresBuild: true
     dev: false
     optional: true
 
-  /@secure-exec/v8-darwin-x64@0.2.0-rc.1:
-    resolution: {integrity: sha512-il4VCFjR7/mSzTZnFcO9SjXqfmle46n+fu98ASNbuEGvKnYoJPNABBZHc/lZUd0KktRbAg7ox+NuWm0qBnxeyg==}
+  /@secure-exec/v8-darwin-x64@0.2.0-rc.2:
+    resolution: {integrity: sha512-QV/Q0fE6P3I/QpviS5UFieBj/6f1LoGfRTtFTAmQs67bVGc0k0wYYL50s4ke7tE60ljfUdUJLL2JbzuIV+m36g==}
     cpu: [x64]
     os: [darwin]
     requiresBuild: true
     dev: false
     optional: true
 
-  /@secure-exec/v8-linux-arm64-gnu@0.2.0-rc.1:
-    resolution: {integrity: sha512-JPXTBYM4Mj2cg7aRI+RhLiDZSOtSCl+BfA36a/qEfO5G9LmZy+DsI2JVe36PIeYwnelMe0rBMSINHStknqwD2Q==}
+  /@secure-exec/v8-linux-arm64-gnu@0.2.0-rc.2:
+    resolution: {integrity: sha512-/KEKSHBZ70Frz/8So35YTnDcqGrb3chtsFrJTTuTDKHuTDSvgWNT6fKpafqKOrto37tkORm2NmzWrhb1zGC6ug==}
     cpu: [arm64]
     os: [linux]
     requiresBuild: true
     dev: false
     optional: true
 
-  /@secure-exec/v8-linux-x64-gnu@0.2.0-rc.1:
-    resolution: {integrity: sha512-bDHVy36ogaxCstoRrCPiuwyD38OTt0+lBG+sUfT3/8mmpgs04VsS9s9/vMppp1iks79OYpq6CQNowWiuOjS1Aw==}
+  /@secure-exec/v8-linux-x64-gnu@0.2.0-rc.2:
+    resolution: {integrity: sha512-fEnAbKa1iscGq7L2L5dZQpJu+gTxANeybqX11P1ZnAyoap/Xiu3hHMDphNIjT2qQ1CfQhliPR+i7AZmAF+WQlA==}
     cpu: [x64]
     os: [linux]
     requiresBuild: true
