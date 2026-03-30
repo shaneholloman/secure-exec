@@ -1276,7 +1276,7 @@ export class NodeExecutionDriver implements RuntimeDriver {
 				},
 				timingMitigation,
 				frozenTimeMs,
-				options.mode,
+				sessionMode,
 				options.filePath,
 				bindingKeys,
 			);
