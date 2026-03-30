@@ -946,9 +946,10 @@ pub fn execute_module(
         }
 
         // Evaluate
-        eprintln!("[v8-runtime] evaluating module...");
+        let eval_start = std::time::Instant::now();
+        eprintln!("[v8-runtime] evaluating module (resource={})...", resource_name_str);
         let eval_result = module.evaluate(tc);
-        eprintln!("[v8-runtime] evaluate done: result={}", eval_result.is_some());
+        eprintln!("[v8-runtime] evaluate done: result={} elapsed={}ms", eval_result.is_some(), eval_start.elapsed().as_millis());
         if eval_result.is_none() {
             clear_module_state();
             return match tc.exception() {

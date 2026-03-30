@@ -476,6 +476,7 @@ export class ModuleAccessFileSystem implements VirtualFileSystem {
 				!this.hostNodeModulesRoot ||
 				!this.isWithinAllowedOverlayRoots(canonical)
 			) {
+				console.error(`[module-access] OUT_OF_SCOPE: virtualPath=${virtualPath} canonical=${canonical} allowedRoots=${this.overlayAllowedRoots.length} first3=${this.overlayAllowedRoots.slice(0,3).join(', ')}`);
 				throw createModuleAccessError(
 					MODULE_ACCESS_OUT_OF_SCOPE,
 					`resolved path for '${virtualPath}' escapes allowed overlay roots`,

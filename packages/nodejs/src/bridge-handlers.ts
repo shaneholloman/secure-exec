@@ -3443,8 +3443,11 @@ export function buildModuleLoadingBridgeHandlers(
 		}
 
 		// Regular files load differently for CommonJS require() vs V8's ESM loader.
+		console.error(`[loadFile-async] falling to async path for: ${p.slice(-60)}`);
 		return (async () => {
+			console.error(`[loadFile-async] loading from VFS: ${p.slice(-60)}`);
 			const source = await loadFile(p, deps.filesystem);
+			console.error(`[loadFile-async] VFS result: ${source ? source.length + ' bytes' : 'null'}`);
 			if (source === null) return null;
 			if (loadMode === "require") {
 				return transformSourceForRequire(source, p);

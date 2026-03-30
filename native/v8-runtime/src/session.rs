@@ -856,10 +856,18 @@ pub(crate) fn run_event_loop(
             }
         }
 
-        // Flush microtasks before blocking. This ensures that Promise
-        // continuations (e.g., main() returning from async module evaluation)
-        // run even when no bridge commands are pending.
-        scope.perform_microtask_checkpoint();
+        // Flush microtasks before blocking. Run in a loop to drain the full
+        // microtask queue -- each checkpoint may resolve Promises that schedule
+        // new microtasks (e.g., async function await chains).
+        for _ in 0..100 {
+            scope.perform_microtask_checkpoint();
+            // Check if new deferred work appeared from microtask processing
+            if let Some(dq) = deferred {
+                if !dq.lock().unwrap().is_empty() {
+                    break; // New bridge work to process
+                }
+            }
+        }
 
         // Re-check exit conditions after microtask flush — the microtask may
         // have resolved all pending promises or registered new handles.
