@@ -113,6 +113,8 @@ export async function createV8Runtime(
 		stdio: ["ignore", "pipe", "pipe"],
 		env: childEnv,
 	});
+	// Forward V8 runtime stderr to host stderr for debugging
+	child.stderr?.pipe(process.stderr);
 
 	// Track whether the process is alive
 	let processAlive = true;

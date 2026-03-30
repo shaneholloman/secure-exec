@@ -910,19 +910,10 @@ class NodeRuntimeDriver implements RuntimeDriver {
                   console.error(`[_resolveEntry] ESM→CJS transform OK: ${scriptPath} (${content.length}→${transformed.length})`);
                   return { code: transformed, filePath: scriptPath };
                 }
-                // CJS transform failed (e.g., top-level await). Wrap in a CJS
-                // async launcher that imports the module and then waits for active
-                // handles (event loop pump). This runs in exec mode with full
-                // event loop support via _waitForActiveHandles.
-                console.error(`[_resolveEntry] ESM async launcher: ${scriptPath} (${content.length} bytes)`);
-                const launcher = [
-                  `/*__secure_exec_require_esm__*/`,
-                  `(async function() {`,
-                  `  try { await __dynamicImport(${JSON.stringify(scriptPath)}, ${JSON.stringify(scriptPath)}); }`,
-                  `  catch(e) { process.stderr.write(String(e.stack || e.message) + "\\n"); process.exit(1); }`,
-                  `})();`,
-                ].join("\n");
-                return { code: launcher, filePath: scriptPath };
+                // CJS transform failed (e.g., top-level await). Fall through to
+                // V8 native ESM "run" mode. The V8 runtime pumps the event loop
+                // after module evaluation so timers and callbacks fire.
+                console.error(`[_resolveEntry] ESM→CJS failed, using V8 ESM run mode: ${scriptPath}`);
               }
               return { code: content, filePath: scriptPath };
             } catch {

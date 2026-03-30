@@ -545,13 +545,24 @@ fn session_thread(
                         }
 
                         // Run event loop while bridge work or async ESM
-                        // evaluation is still pending.
-                        let event_loop_status =
-                            if pending.len() > 0
-                                || execution::has_pending_module_evaluation()
-                                || execution::has_pending_script_evaluation()
-                                || !deferred_queue.lock().unwrap().is_empty()
-                            {
+                        // evaluation is still pending. For ESM modules (mode != 0),
+                        // always enter the event loop even if no pending promises
+                        // are visible yet — the module body may have registered
+                        // timers, stdin listeners, or child_process handles that
+                        // need event loop pumping to deliver their callbacks.
+                        let should_enter_event_loop =
+                            pending.len() > 0
+                            || execution::has_pending_module_evaluation()
+                            || execution::has_pending_script_evaluation()
+                            || !deferred_queue.lock().unwrap().is_empty()
+                            || mode != 0; // Always pump for ESM modules
+                        let event_loop_status = if should_enter_event_loop {
+                                eprintln!("[v8-runtime] entering event loop: pending={} module_eval={} script_eval={} deferred={} esm={}",
+                                    pending.len(),
+                                    execution::has_pending_module_evaluation(),
+                                    execution::has_pending_script_evaluation(),
+                                    !deferred_queue.lock().unwrap().is_empty(),
+                                    mode != 0);
                                 let scope = &mut v8::HandleScope::new(iso);
                                 let ctx = v8::Local::new(scope, &exec_context);
                                 let scope = &mut v8::ContextScope::new(scope, ctx);
@@ -566,7 +577,7 @@ fn session_thread(
                                 EventLoopStatus::Completed
                             };
 
-                        let terminated = matches!(event_loop_status, EventLoopStatus::Terminated);
+                        let mut terminated = matches!(event_loop_status, EventLoopStatus::Terminated);
                         if let EventLoopStatus::Failed(next_code, next_error) = event_loop_status {
                             code = next_code;
                             error = Some(next_error);
@@ -584,6 +595,62 @@ fn session_thread(
                                 code = next_code;
                                 exports = next_exports;
                                 error = next_error;
+                            }
+                        }
+
+                        // For ESM modules: call _waitForActiveHandles() to keep
+                        // the session alive while handles (timers, child processes,
+                        // stdin listeners) are active. This creates a pending promise
+                        // that the event loop pumps until all handles resolve.
+                        if !terminated && mode != 0 && error.is_none() {
+                            // Phase 1: call _waitForActiveHandles() to register a pending promise
+                            {
+                                let scope = &mut v8::HandleScope::new(iso);
+                                let ctx = v8::Local::new(scope, &exec_context);
+                                let scope = &mut v8::ContextScope::new(scope, ctx);
+                                let global = ctx.global(scope);
+                                let key = v8::String::new(scope, "_waitForActiveHandles").unwrap();
+                                if let Some(func) = global.get(scope, key.into()) {
+                                    if func.is_function() {
+                                        let func = v8::Local::<v8::Function>::try_from(func).unwrap();
+                                        let recv = v8::undefined(scope).into();
+                                        if let Some(result) = func.call(scope, recv, &[]) {
+                                            if result.is_promise() {
+                                                let promise = v8::Local::<v8::Promise>::try_from(result).unwrap();
+                                                eprintln!("[v8-runtime] _waitForActiveHandles promise state: {:?}", promise.state());
+                                                if promise.state() == v8::PromiseState::Pending {
+                                                    execution::set_pending_script_evaluation(scope, promise);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Phase 2: pump event loop for active handles
+                            if pending.len() > 0
+                                || execution::has_pending_script_evaluation()
+                                || !deferred_queue.lock().unwrap().is_empty()
+                            {
+                                eprintln!("[v8-runtime] pumping event loop for ESM active handles");
+                                let scope = &mut v8::HandleScope::new(iso);
+                                let ctx = v8::Local::new(scope, &exec_context);
+                                let scope = &mut v8::ContextScope::new(scope, ctx);
+                                let event_loop_status = run_event_loop(
+                                    scope,
+                                    &rx,
+                                    &pending,
+                                    maybe_abort_rx.as_ref(),
+                                    Some(&deferred_queue),
+                                );
+
+                                if matches!(event_loop_status, EventLoopStatus::Terminated) {
+                                    terminated = true;
+                                }
+                                if let EventLoopStatus::Failed(next_code, next_error) = event_loop_status {
+                                    code = next_code;
+                                    error = Some(next_error);
+                                }
                             }
                         }
 

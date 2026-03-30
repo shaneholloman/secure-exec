@@ -678,7 +678,7 @@ fn set_pending_module_evaluation(
     });
 }
 
-fn set_pending_script_evaluation(
+pub fn set_pending_script_evaluation(
     scope: &mut v8::HandleScope,
     promise: v8::Local<v8::Promise>,
 ) {
